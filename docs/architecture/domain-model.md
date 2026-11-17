@@ -82,7 +82,7 @@ representations for annotative types.
 | Curves | Line, construction line, ray, circle, arc, ellipse, lightweight polyline, 2D and 3D polyline with vertices, spline, helix, point, multiline |
 | Areas and masks | Hatch (pattern, solid, gradient), region, 2D solid, trace, wipeout, revision cloud as polyline |
 | Annotation | Text, paragraph text, attribute definition, attribute, dimension (rotated, aligned, angular, radial, diameter, jogged, arc length, ordinate), leader, multileader, tolerance frame, table, center mark and centerline, arc-aligned text |
-| References | Block reference, grid block reference, external reference (block reference to an external block record), raster image, PDF and other underlays, embedded object frame, point cloud reference, Arc document reference |
+| References | Block reference, grid block reference, external reference (block reference to an external block record), raster image, PDF and other underlays, embedded object frame (cached image, link record and, on Windows, the source application's data), point cloud reference, Arc document reference |
 | Layout | Paper space viewport |
 | 3D | Solid, surface (procedural and NURBS), body, region, mesh, polyface and polygon meshes, 3D face, section plane, light, camera, sun, geographic location |
 | Toolset | Typed domain objects defined by the toolset framework ([20-toolset-framework.md](../product/capabilities/20-toolset-framework.md)) |
@@ -195,6 +195,13 @@ Rules that apply to every node:
 - Cycles in associations are refused when created.
 - A node whose computation fails keeps its previous result, marks the object, and reports the
   failure; it never aborts the transaction that triggered it.
+
+## Offline replicas on other targets
+
+On browser and mobile targets a drawing can be held as an offline replica: the drawing database, its
+operation journal and the change sets not yet sent to Arc Hub. The replica obeys the same invariants
+as a desktop drawing; synchronization applies change sets as transactions and keeps both states on a
+conflict ([ADR-0007](../adr/0007-web-and-mobile-targets.md)).
 
 ## Toolsets at framework level
 

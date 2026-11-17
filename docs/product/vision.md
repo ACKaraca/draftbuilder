@@ -45,8 +45,10 @@ pipeline, headless automation and optional multi-user collaboration through Arc 
    and programmatic execution never opens a dialog.
 5. **State fidelity, do not claim it.** DWG fidelity is a set of targets verified by independent
    readers and published per version; every import, export and save-down produces a loss report.
-6. **One application, three platforms.** Windows, macOS and Linux receive the same executable
-   features, file behavior and customization formats.
+6. **One application, every platform.** Windows, macOS and Linux receive the same executable
+   features, file behavior and customization formats; the browser, tablets and phones are further
+   targets of the same code, staged from viewing to full 2D editing
+   ([ADR-0007](../adr/0007-web-and-mobile-targets.md)).
 7. **Offline and account free.** No feature needs a network, an account or a license server; Arc
    Hub adds collaboration when a team chooses to run one.
 8. **Customization is open.** Aliases, UI customization, tool palettes, macros and standards files
@@ -75,20 +77,30 @@ pipeline, headless automation and optional multi-user collaboration through Arc 
 - Optional discipline toolsets built on a shared framework: architecture, mechanical, building
   services, electrical controls, plant, mapping and raster
   ([20](capabilities/20-toolset-framework.md) to [27](capabilities/27-toolset-raster.md)).
+- Browser, tablet and phone builds with touch and pen input, offline drawings, synchronization and
+  shared sessions through Arc Hub ([28](capabilities/28-web-and-mobile.md)).
+- Windows-specific integration: embedded objects with edit in place
+  ([DB-XREF-031](capabilities/12-references-underlays.md)) and a component-automation bridge that maps
+  existing automation scripts onto the command model
+  ([DB-AUTO-038](capabilities/18-customization-automation.md)).
+- Video output of camera animations and walkthroughs
+  ([DB-M3D-052](capabilities/15-3d-modeling-visualization.md)).
+- Open readers for DGN V7 and Rhino 3DM, connectors for applications whose formats are not
+  published and optional user-licensed bridges
+  ([DB-INTEROP-033](capabilities/19-interoperability-standards.md)).
 
 ## Non-goals
 
+Everything that law or licensing allows is in scope. What remains excluded is excluded for a legal
+reason or because another Arc product owns the task.
+
 | Non-goal | Reason | What DraftBuilder does instead |
 |---|---|---|
-| Embedding or editing documents of other applications through operating-system object linking | The mechanism exists on one platform only and executes foreign components | Embedded objects are preserved and shown with their stored image ([DB-XREF-022](capabilities/12-references-underlays.md)) |
-| Loading compiled native add-ins written for other DWG applications | Native plug-ins break the suite's sandboxing and robustness rules and are bound to one platform | Sandboxed WebAssembly plug-ins, the automation protocol, Python and the Lisp-dialect interpreter ([18](capabilities/18-customization-automation.md)) |
-| Hosting in-process component-automation and macro languages of one operating system | Platform specific and outside the single automation surface | The Arc Automation Protocol with an official Python client; Lisp object-model functions mapped onto the DraftBuilder object model |
+| Loading compiled native add-ins written for other DWG applications | They link against another application's proprietary runtime libraries, which cannot be distributed or reimplemented without reverse engineering undocumented binary interfaces | Sandboxed WebAssembly plug-ins, the automation protocol, Python, the Lisp-dialect interpreter and the Windows automation bridge ([18](capabilities/18-customization-automation.md)) |
 | Running compiled or protected Lisp files | Their formats are undocumented; running them would need reverse engineering | Lisp source files run unchanged where the dialect is covered |
-| Reading proprietary model formats without a published specification | The suite never reverse engineers formats | Exchange through IFC, STEP, glTF, OpenUSD, E57 and LAS ([19](capabilities/19-interoperability-standards.md)) |
-| Proprietary raster codecs without an open specification | Licensing and specification availability | GeoTIFF, TIFF, PNG and JPEG imagery |
+| Reading formats without a published specification or open reader by reverse engineering | The suite never reverse engineers formats or binaries | Open readers where they exist ([DB-INTEROP-033, 034](capabilities/19-interoperability-standards.md)), connectors running inside the other application ([DB-INTEROP-035](capabilities/19-interoperability-standards.md)), optional user-licensed bridges, and IFC, STEP, glTF, OpenUSD, E57 and LAS |
+| Raster codecs whose license forbids open distribution | The license prevents shipping them in an open-source product | GeoTIFF, TIFF, PNG and JPEG imagery; a user-installed codec only through a separate process |
 | Vendor cloud services, account sign-in and usage telemetry | Offline-first, account-free principle | Self-hosted Arc Hub when a team wants collaboration |
-| Web and mobile drafting companions | Kept out of the desktop product to keep one native application | Arc Review's browser viewer and the Arc Hub web client for viewing and markup |
-| Video file output of camera animations | Rendering belongs to one renderer in the suite | RenderBuilder produces image sequences from DraftBuilder camera paths ([DB-M3D-050](capabilities/15-3d-modeling-visualization.md)) |
 | A from-scratch exact solid kernel inside DraftBuilder | Exact modeling is shared across products | 3D solids use the suite B-rep layer `arc-brep` |
 
 ## Positioning
@@ -115,4 +127,6 @@ mapping and raster work.
 | Multi-threaded regeneration and GPU display of very large drawings, with survey coordinates displayed without jitter | [DB-DBASE-044](capabilities/01-drawing-database.md), [DB-CMD-041](capabilities/02-command-interface.md), [DB-DBASE-023](capabilities/01-drawing-database.md) |
 | Deterministic, auditable detection of repeated geometry and conversion to blocks; versioned block libraries | [DB-BLOCK-033 to 036](capabilities/11-blocks-attributes.md) |
 | Toolset objects are typed objects with property sets that degrade to plain entities for other applications | [20](capabilities/20-toolset-framework.md) |
+| The same crates run in the browser and on tablets and phones, with touch and pen input, offline drawings and shared sessions through Arc Hub | [28](capabilities/28-web-and-mobile.md) |
+| Existing automation scripts on Windows run through a bridge that maps every call onto the validated, undoable command model | [DB-AUTO-038 to 043](capabilities/18-customization-automation.md) |
 | Keyboard-complete operation, screen-reader names and a localized interface from the first release | [DB-CMD-047 to 049](capabilities/02-command-interface.md) |

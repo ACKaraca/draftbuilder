@@ -37,7 +37,7 @@ independent readers, never assumed.
 | DB-INTEROP-013 | SAT exchange | Solid data in the SAT text form is imported and exported where an implementation from a published description is available. | T3 | 3 |
 | DB-INTEROP-014 | Mesh formats | glTF, OBJ, STL, PLY, 3MF and OpenUSD import as meshes and export from solids, surfaces and meshes through `arc-io-mesh` and `arc-io-usd`, with tessellation settings and materials where the format carries them. | T2 | 3 |
 | DB-INTEROP-015 | Arc Scene export | 3D content, cameras, lights and materials export as an Arc Scene for RenderBuilder and other Arc products, and updates stream while the drawing changes. | T2 | 4 |
-| DB-INTEROP-016 | DGN exchange | DGN files import to drawing objects and export from them with a mapping of levels, colors, line styles and fonts, for the DGN versions whose format is published. | T3 | 3 |
+| DB-INTEROP-016 | DGN exchange | DGN files import to drawing objects and export from them with a mapping of levels, colors, line styles and fonts, for the DGN versions whose format is published; DGN V7 reading is [DB-INTEROP-033](19-interoperability-standards.md). | T3 | 3 |
 | DB-INTEROP-017 | KML and KMZ | Locations import from KML and KMZ; selected geolocated content exports to KML with coordinates transformed to geodetic. | T3 | 3 |
 | DB-INTEROP-018 | CSV and XLSX | Point lists import from CSV as points or blocks with attributes; tables, extraction results and reports export to CSV and XLSX. | T2 | 2 |
 | DB-INTEROP-019 | Batch conversion | The command-line application converts files or folders between DWG versions, DXF, PDF, SVG and mesh formats in parallel, with one fidelity report per file and a summary. | T2 | 1 |
@@ -69,3 +69,12 @@ independent readers, never assumed.
 | DB-INTEROP-030 | Transmittal package | Collects a drawing or sheet set with its references, images, underlays, fonts, plot style tables, device settings and sheet set files into a folder or ZIP archive, with a report listing every file and every dependency that could not be found. | T2 | 2 |
 | DB-INTEROP-031 | Package options | Options rewrite reference paths to relative or remove them, bind references, include or exclude fonts and textures, and convert all drawings to a chosen DWG version with the fidelity report included; named package setups save the options. | T2 | 2 |
 | DB-INTEROP-032 | Headless packaging | The command-line application builds transmittal packages from a drawing list or sheet set for scripted delivery. | T3 | 2 |
+
+## Open readers and proprietary applications
+
+| ID | Capability | Behavior | Tier | Phase |
+|---|---|---|---|---|
+| DB-INTEROP-033 | DGN V7 reader | DGN V7 files are read from their published specification through an `arc-io-*` crate and mapped to drawing objects, with levels, colors, line styles, fonts and cells mapped to layers, linetypes, text styles and blocks; unmapped elements are listed in the loss report. Files attach as underlays ([DB-XREF-028](12-references-underlays.md)) or import as geometry. | T3 | 5 |
+| DB-INTEROP-034 | Rhino 3DM reader | 3DM files are read through a permissively licensed open reader behind an `arc-io-*` crate; curves, surfaces, meshes, blocks, layers, materials and units map to drawing and 3D objects, with a loss report for what has no counterpart. Files attach as 3D references ([DB-XREF-034](12-references-underlays.md)) or import as geometry. | T3 | 5 |
+| DB-INTEROP-035 | Exchange through connectors | Data of proprietary applications whose formats have no published specification or open reader is exchanged through the Arc exchange package, written and read by connectors that run inside the other application through its public API ([ADR-0017](https://github.com/ACKaraca/arc-suite/blob/main/docs/adr/0017-exchange-connectors-and-licensed-bridges.md)). DraftBuilder opens the package as geometry with properties and identifiers, and writes drawings to it, with a loss report. | T3 | 5 |
+| DB-INTEROP-036 | Optional user-licensed bridge | A conversion library that its owner licenses to the user can be configured as a bridge: it runs as a separate process exchanging bytes with DraftBuilder, is never distributed with DraftBuilder or required for any workflow, and its use is recorded in the loss report (extends [DB-INTEROP-006](19-interoperability-standards.md)). | T3 | 5 |

@@ -13,6 +13,8 @@ This folder records decisions specific to DraftBuilder. Suite-wide decisions liv
 | [0004](0004-pure-rust-dwg-from-public-specification.md) | DWG reading and writing in pure Rust from the public specification | accepted |
 | [0005](0005-lisp-interpreter-out-of-process.md) | The Lisp-dialect interpreter runs out of process as an automation client | accepted |
 | [0006](0006-toolset-objects-degrade-to-entities.md) | Toolset objects are typed objects that degrade to plain entities | accepted |
+| [0007](0007-web-and-mobile-targets.md) | Browser and mobile builds are targets of the same crates | accepted |
+| [0008](0008-windows-integration-crate.md) | Windows object linking and the automation bridge live in one Windows-only FFI crate | accepted |
 
 ## Template
 

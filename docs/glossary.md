@@ -10,12 +10,15 @@ Terms used across the DraftBuilder documents, one line each. Suite-wide terms ar
 | Annotative object | Text, dimension, leader, hatch, block or attribute defined at paper size with one representation per annotation scale |
 | Associative object | Object whose geometry follows other objects: associative dimension, hatch, array, center mark, constraint |
 | Attribute | Named text value carried by a block reference, defined by an attribute definition in the block |
+| Automation bridge | Windows-only separate process that maps component-automation calls onto registered commands |
 | Block | Named group of entities with a base point, defined once in a block record and placed by block references |
 | Block authoring mode | Editing environment for block definitions, their parameters, actions, visibility states and constraints |
 | ByBlock, ByLayer | Property values that defer to the containing block reference or to the entity's layer |
+| Browser build | DraftBuilder compiled to WebAssembly from the same crates and run in a web browser |
 | Change set | The journal entries of one or more transactions sent between collaborators |
 | Command preview | Temporary display of a command's result while it waits for input |
 | Compatibility name | A widely used setting name accepted from scripts, routines and drawings and mapped to a DraftBuilder setting |
+| Connector | Add-in running inside another application through its public API that reads or writes the Arc exchange package |
 | Constraint network | Geometric and dimensional constraints, parameters and constrained geometry solved together |
 | Cursor input | Input fields, measurements and prompts shown next to the pointer |
 | Custom object | Object of a class defined by an application rather than the format itself |
@@ -24,6 +27,7 @@ Terms used across the DraftBuilder documents, one line each. Suite-wide terms ar
 | Drawing database | The DWG/DXF data model held in memory: header, classes, tables, block records, entities, dictionaries |
 | Dynamic block | Block whose references can change shape through parameters, actions and visibility states |
 | Element borrowing | Temporary exclusive editing right on objects or a region during multi-user editing |
+| Embedded object | Document of another application held in a drawing as an object frame with a cached image |
 | Extended data | Typed values attached to an object under a registered application name |
 | Extension dictionary | Dictionary owned by an object for application data |
 | External reference | Another drawing displayed in the host drawing and loaded from its own file |
@@ -37,6 +41,7 @@ Terms used across the DraftBuilder documents, one line each. Suite-wide terms ar
 | Loss report | Structured list of what an open, save, import or export preserved, converted or dropped |
 | Markup overlay | Comment layer kept outside drawing geometry and aligned to it |
 | Model space | The space where design geometry is drawn at real size |
+| Offline replica | Drawing, journal and pending change sets stored on a device for use without a network |
 | Non-interactive form | Command execution with complete parameters, from scripts, the protocol or the CLI, that never opens a dialog |
 | Object coordinate system | Coordinate system derived from a planar entity's normal in which its geometry is stored |
 | Object snap | Exact point on existing geometry picked by the pointer, such as an endpoint or intersection |
@@ -52,6 +57,7 @@ Terms used across the DraftBuilder documents, one line each. Suite-wide terms ar
 | Proxy graphics | Graphics stored with a custom object so applications without its definition can display it |
 | Query selection | Selection built from object type, property, operator and value |
 | Registered application | Name under which extended data is stored |
+| Stage | Level of editing offered on a non-desktop target: viewing and markup, light editing or full 2D editing |
 | Sheet set | Ordered collection of layouts across drawings with shared properties, numbering and publishing |
 | Sidecar package | `.draftb` file beside a drawing holding history, recovery data, settings and Hub metadata |
 | Stable ID | 128-bit object identifier derived from the drawing fingerprint and the handle |

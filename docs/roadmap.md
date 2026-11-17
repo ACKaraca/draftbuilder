@@ -17,6 +17,7 @@ pass on Windows, macOS and Linux. The suite phases are defined in
 | M4 | 3 | 3D, reality data and open 3D exchange |
 | M5 | 4 | Visualization and toolsets |
 | M6 | 5 | Multi-user editing and assistance |
+| M7 | 5 | Browser, mobile, platform integration and open readers |
 
 ## M0 Foundation readiness (phase 0)
 
@@ -208,3 +209,32 @@ toolset files.
 - An assistant request such as "dimension all doors on this sheet" shows a preview of the commands
   and their effects, applies only on confirmation as undoable transactions, and works with a local
   model and with no network.
+
+## M7 Browser, mobile, platform integration and open readers (phase 5)
+
+**Goal.** The same crates run in the browser and on tablets and phones, staged from viewing and light
+editing to full 2D editing; Windows users edit embedded objects in place and drive DraftBuilder from
+existing automation scripts; camera animations leave as video; and DGN V7 and Rhino 3DM files open
+without conversion.
+
+**Scope.**
+
+- [DB-WEB-001 to 031](product/capabilities/28-web-and-mobile.md); stage 1 (DB-WEB-006 to 013),
+  stage 2 (DB-WEB-023) and stage 3 (DB-WEB-024) are released in that order.
+- [DB-XREF-031 to 034](product/capabilities/12-references-underlays.md),
+  [DB-AUTO-038 to 043](product/capabilities/18-customization-automation.md),
+  [DB-M3D-052 to 055](product/capabilities/15-3d-modeling-visualization.md),
+  [DB-INTEROP-033 to 036](product/capabilities/19-interoperability-standards.md).
+
+**Dependencies.** M6 for shared sessions; the browser and mobile targets of `arc-app` and `arc-ui`
+([ADR-0018](https://github.com/ACKaraca/arc-suite/blob/main/docs/adr/0018-web-and-mobile-targets.md),
+[ADR-0007](adr/0007-web-and-mobile-targets.md)); [ADR-0008](adr/0008-windows-integration-crate.md);
+RenderBuilder and the video encoding component of `arc-core`; the Arc exchange package and the first
+connectors ([ADR-0017](https://github.com/ACKaraca/arc-suite/blob/main/docs/adr/0017-exchange-connectors-and-licensed-bridges.md));
+resolution of [OQ-31](product/open-questions.md) to [OQ-33](product/open-questions.md).
+
+**Exit criteria.**
+
+- [W15](product/workflows.md#w15-review-and-edit-a-drawing-in-the-browser-and-on-a-tablet) passes
+  at stage 1, then at stage 2, then at stage 3.
+- [W16](product/workflows.md#w16-windows-integration-open-readers-and-video) passes.

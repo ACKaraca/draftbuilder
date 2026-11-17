@@ -318,3 +318,49 @@ interactively and, where marked, as a headless script.
   transactions.
 - The conflict keeps both versions side by side for comparison; no work is discarded.
 - The drawing saved from the session opens in an independent reader with all accepted changes.
+
+## W15 Review and edit a drawing in the browser and on a tablet
+
+1. A reviewer opens a Hub share link in a browser, pans, switches layouts and toggles layers
+   ([DB-WEB-006](capabilities/28-web-and-mobile.md), [DB-WEB-008](capabilities/28-web-and-mobile.md)).
+2. The reviewer measures a wall and marks up a detail with a pen
+   ([DB-WEB-009](capabilities/28-web-and-mobile.md), [DB-WEB-010](capabilities/28-web-and-mobile.md),
+   [DB-WEB-016](capabilities/28-web-and-mobile.md)).
+3. On a tablet with no network, a drafter opens an offline drawing, moves a door and adds a note by
+   touch with the loupe ([DB-WEB-015](capabilities/28-web-and-mobile.md),
+   [DB-WEB-023](capabilities/28-web-and-mobile.md), [DB-WEB-027](capabilities/28-web-and-mobile.md)).
+4. The tablet reconnects; the edit and markup synchronize while a desktop user edited another area
+   ([DB-WEB-028](capabilities/28-web-and-mobile.md), [DB-WEB-029](capabilities/28-web-and-mobile.md)).
+5. A command unavailable at the tablet's stage is searched for and reported with its reason
+   ([DB-WEB-004](capabilities/28-web-and-mobile.md)).
+
+**Acceptance**
+
+- The markup appears as overlay items in the desktop application and does not change geometry.
+- Offline edits survive closing the application and are applied as undoable transactions in the
+  drawing's journal; a conflicting edit keeps both versions.
+- The drawing saved after synchronization opens in an independent reader with all accepted changes.
+- Plotting the layout in the browser matches desktop output within the plot comparison tolerance.
+
+## W16 Windows integration, open readers and video
+
+1. On Windows, a drafter inserts a document of another application as an embedded object, edits it
+   in place and plots the sheet ([DB-XREF-031](capabilities/12-references-underlays.md),
+   [DB-XREF-033](capabilities/12-references-underlays.md)).
+2. A script written for the conventional automation object model is checked for coverage and run
+   through the automation bridge ([DB-AUTO-038](capabilities/18-customization-automation.md),
+   [DB-AUTO-040](capabilities/18-customization-automation.md)).
+3. The drafter attaches a DGN V7 file as an underlay and a 3DM file as a 3D reference
+   ([DB-XREF-028](capabilities/12-references-underlays.md), [DB-XREF-034](capabilities/12-references-underlays.md)).
+4. The drafter records a walkthrough and writes it as video through RenderBuilder
+   ([DB-M3D-054](capabilities/15-3d-modeling-visualization.md), [DB-M3D-052](capabilities/15-3d-modeling-visualization.md)).
+
+**Acceptance**
+
+- The embedded object opens without a prompt only in a trusted location, never in a headless run,
+  and the saved drawing shows its cached image in an independent reader.
+- Every script call runs as one undoable transaction; unmapped members are listed before the run and
+  fail with a named error.
+- The loss report lists the DGN and 3DM elements that have no counterpart.
+- The video file plays in an independent player at the requested resolution and frame rate, and a
+  repeated run produces the same frames.

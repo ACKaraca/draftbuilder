@@ -13,8 +13,8 @@ command vocabulary and aliases, precise drafting, annotation, blocks with attrib
 behavior, external references, parametric constraints, layouts, plotting and sheet sets, 3D solids,
 surfaces, meshes and point clouds; and it runs existing scripts and Lisp routines. Optional toolsets
 add architecture, mechanical, building services, electrical controls, plant, mapping and raster work.
-It is written in Rust, runs on Windows, macOS and Linux with identical features, and needs no
-account or network.
+It is written in Rust, runs on Windows, macOS and Linux with identical features, runs in browsers
+and on tablets and phones as further targets of the same code, and needs no account or network.
 
 ## Who it is for
 
@@ -37,7 +37,7 @@ and customization for teams; and developers who automate drawing production.
 | Dimensions and leaders | Dimensions, styles, tolerances, leaders, center marks | [09](docs/product/capabilities/09-dimensions-leaders.md) |
 | Hatches and fills | Hatches, patterns, gradients, solid fills | [10](docs/product/capabilities/10-hatch-fill.md) |
 | Blocks and attributes | Blocks, attributes, in-place editing, dynamic blocks, libraries | [11](docs/product/capabilities/11-blocks-attributes.md) |
-| References and underlays | External references, images, PDF underlays and import, 3D references | [12](docs/product/capabilities/12-references-underlays.md) |
+| References and underlays | External references, images, PDF and DGN underlays, PDF import, 3D references, embedded objects | [12](docs/product/capabilities/12-references-underlays.md) |
 | Parametric constraints | Geometric and dimensional constraints, parameter table | [13](docs/product/capabilities/13-parametric-constraints.md) |
 | Layouts and plotting | Layouts, viewports, annotation scaling, plotting, publishing, sheet sets | [14](docs/product/capabilities/14-layouts-plotting.md) |
 | 3D modeling and visualization | Solids, surfaces, meshes, sections, drawing views, rendering | [15](docs/product/capabilities/15-3d-modeling-visualization.md) |
@@ -46,6 +46,7 @@ and customization for teams; and developers who automate drawing production.
 | Customization and automation | UI customization, scripts, macros, Lisp, protocol, CLI, plug-ins | [18](docs/product/capabilities/18-customization-automation.md) |
 | Interoperability and standards | DWG, DXF and other formats, fonts, standards checking, packages | [19](docs/product/capabilities/19-interoperability-standards.md) |
 | Toolsets | Framework and seven discipline toolsets | [20](docs/product/capabilities/20-toolset-framework.md) to [27](docs/product/capabilities/27-toolset-raster.md) |
+| Web and mobile | Browser, tablet and phone builds, touch and pen input, offline drawings, synchronization | [28](docs/product/capabilities/28-web-and-mobile.md) |
 
 ## How it fits in the suite
 

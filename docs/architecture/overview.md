@@ -24,6 +24,9 @@ enabled modules that share one framework.
 | `apps/draftbuilder` | binary | Desktop application: wiring only |
 | `apps/draftbuilder-cli` | binary | Headless CLI: open, convert, validate, audit, plot, publish, compare, run scripts and Lisp files, serve the automation protocol |
 | `apps/draftbuilder-lisp` | binary | Out-of-process host for the Lisp interpreter ([ADR-0005](../adr/0005-lisp-interpreter-out-of-process.md)) |
+| `apps/draftbuilder-web`, `apps/draftbuilder-mobile` | binaries | Browser (WebAssembly) and tablet and phone entry points: wiring only, on the same crates ([ADR-0007](../adr/0007-web-and-mobile-targets.md)) |
+| `apps/draftbuilder-com` | binary, Windows only | Out-of-process automation bridge, a protocol client ([ADR-0008](../adr/0008-windows-integration-crate.md)) |
+| `crates/draftbuilder-windows` | library, Windows only | The FFI crate for object linking and the automation server ([ADR-0008](../adr/0008-windows-integration-crate.md)) |
 
 ```mermaid
 graph TD
@@ -76,6 +79,7 @@ the model, which keeps the interpreter replaceable and the process boundary hone
 | `arc-nodes` | Node graphs over commands (phase 4) |
 | `arc-io-dwg`, `arc-io-dxf` | Neutral models of the DWG and DXF formats, readers and writers ([dwg-compatibility.md](dwg-compatibility.md)) |
 | `arc-io-pdf`, `arc-io-mesh`, `arc-io-step`, `arc-io-ifc`, `arc-io-pointcloud`, `arc-io-geo` | Other formats ([interoperability.md](interoperability.md)) |
+| `arc-io-dgn`, `arc-io-3dm` | Open readers for DGN V7 and Rhino 3DM (phase 5) |
 | `arc-hub-api` | Opening and saving through Arc Hub, locks, versions, reviews, issues, change sets |
 | `arc-gpu` | 2D and 3D viewport, drafting-quality lines, lineweights, hatches, text, picking, point clouds |
 | `arc-ui`, `arc-app` | Docking workspace, command line, property grid, trees, palettes, settings, localization, plug-in loading, assistant panel |
@@ -145,6 +149,16 @@ continues during background plots.
 | Lisp host | lisp | Out-of-process interpreter speaking the automation protocol |
 | Toolset framework | toolset | Typed objects stored as custom objects with proxy graphics and plain-entity fallbacks ([ADR-0006](../adr/0006-toolset-objects-degrade-to-entities.md)) |
 
+## Web and mobile targets
+
+The browser, tablet and phone builds compile `draftbuilder-model`, `-commands`, `-io` and
+`-toolset` and the same `draftbuilder-ui` for `wasm32`, iOS and Android
+([ADR-0007](../adr/0007-web-and-mobile-targets.md)). Platform facilities (files, storage, camera,
+location) come through `arc-app`. Each registered command carries a target-availability flag, so
+staging from viewing to full 2D editing is a release decision. An offline replica holds the drawing,
+its journal and pending change sets; synchronization and shared sessions use `arc-hub-api`.
+Components that cannot run on a device, such as the Lisp host, run as Arc Hub jobs.
+
 ## Threading and background work
 
 - The UI thread handles input, layout and drawing of the interface; it never waits on the database.
@@ -178,7 +192,8 @@ they are design goals, not measurements.
 Every capability is reachable through the command registry. The registry is exposed through menus
 and panels, the command line, macro recording, scripts, the Lisp interpreter, the Arc Automation
 Protocol, the Model Context Protocol endpoint, the Python client, the headless CLI, node graphs
-(phase 4) and WebAssembly plug-ins (phase 3). The same commands run as Arc Hub jobs through the CLI.
+(phase 4) WebAssembly plug-ins (phase 3) and, on Windows, the automation bridge (phase 5). The same commands
+run as Arc Hub jobs through the CLI.
 See [command-line.md](command-line.md) and
 [18-customization-automation.md](../product/capabilities/18-customization-automation.md).
 
