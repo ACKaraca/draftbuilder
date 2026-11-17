@@ -30,14 +30,14 @@ Status is never recorded in these tables; it is tracked in GitHub issues and the
 | [09-dimensions-leaders.md](09-dimensions-leaders.md) | DIM | Dimensions, dimension styles, tolerances, leaders, center marks | 35 |
 | [10-hatch-fill.md](10-hatch-fill.md) | HATCH | Hatches, patterns, gradients, solid fills | 23 |
 | [11-blocks-attributes.md](11-blocks-attributes.md) | BLOCK | Blocks, attributes, in-place editing, dynamic blocks, counting, block detection, libraries | 36 |
-| [12-references-underlays.md](12-references-underlays.md) | XREF | External references, path management, raster images, underlays, PDF import, 3D references | 30 |
+| [12-references-underlays.md](12-references-underlays.md) | XREF | External references, path management, raster images, underlays, PDF import, 3D references, embedded objects | 34 |
 | [13-parametric-constraints.md](13-parametric-constraints.md) | CNSTR | Geometric and dimensional constraints, parameter table, solving | 23 |
 | [14-layouts-plotting.md](14-layouts-plotting.md) | PLOT | Layouts, viewports, annotation scaling, page setups, plot styles, plotting, publishing, sheet sets | 45 |
-| [15-3d-modeling-visualization.md](15-3d-modeling-visualization.md) | M3D | Solids, surfaces, meshes, sections, drawing views, visual styles, navigation, lights, materials, rendering | 51 |
+| [15-3d-modeling-visualization.md](15-3d-modeling-visualization.md) | M3D | Solids, surfaces, meshes, sections, drawing views, visual styles, navigation, lights, materials, rendering, video output | 55 |
 | [16-point-clouds-geolocation.md](16-point-clouds-geolocation.md) | REAL | Point clouds, geographic location, base maps, georeferenced rasters | 21 |
 | [17-compare-history-collaboration.md](17-compare-history-collaboration.md) | COLLAB | Drawing compare, history, markup, Arc Hub, multi-user editing | 29 |
-| [18-customization-automation.md](18-customization-automation.md) | AUTO | UI customization, templates, scripts, macros, Lisp-dialect interpreter, automation protocol, CLI, plug-ins | 37 |
-| [19-interoperability-standards.md](19-interoperability-standards.md) | INTEROP | DWG and DXF, other formats, fonts, drawing standards, transmittal packages | 32 |
+| [18-customization-automation.md](18-customization-automation.md) | AUTO | UI customization, templates, scripts, macros, Lisp-dialect interpreter, automation protocol, CLI, plug-ins, Windows automation bridge | 43 |
+| [19-interoperability-standards.md](19-interoperability-standards.md) | INTEROP | DWG and DXF, other formats, open readers, connectors and bridges, fonts, drawing standards, transmittal packages | 36 |
 | [20-toolset-framework.md](20-toolset-framework.md) | TSF | Shared toolset framework: typed objects, styles, display, property sets, schedules, projects, degradation | 83 |
 | [21-toolset-architecture.md](21-toolset-architecture.md) | TARCH | Architecture toolset | 68 |
 | [22-toolset-mechanical.md](22-toolset-mechanical.md) | TMECH | Mechanical toolset | 58 |
@@ -46,6 +46,7 @@ Status is never recorded in these tables; it is tracked in GitHub issues and the
 | [25-toolset-plant.md](25-toolset-plant.md) | TPLANT | Plant toolset | 56 |
 | [26-toolset-mapping.md](26-toolset-mapping.md) | TMAP | Mapping toolset | 58 |
 | [27-toolset-raster.md](27-toolset-raster.md) | TRAST | Raster toolset | 48 |
+| [28-web-and-mobile.md](28-web-and-mobile.md) | WEB | Browser, tablet and phone builds, touch and pen input, command access on small screens, offline drawings, synchronization and shared sessions through Arc Hub | 31 |
 
 ## Capabilities and issues
 

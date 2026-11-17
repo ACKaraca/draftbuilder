@@ -9,8 +9,9 @@ paths for whole projects without opening a window.
 - **External reference** — a link to another DWG or DXF with attachment type, saved path, found path, insertion transform, clip and load state.
 - **Reference clip** — a rectangular or polygonal boundary, optionally inverted, with optional front and back clipping planes.
 - **Raster image** — a linked image with size, placement, clip, display adjustments and draw order.
-- **Underlay** — a linked PDF page (and, subject to specification, DGN or DWF file) displayed with layer control and snapping.
-- **3D reference** — a linked Arc document or IFC, STEP or glTF file placed in model space.
+- **Underlay** — a linked PDF page, DGN V7 file or (subject to specification) DWF file displayed with layer control and snapping.
+- **Embedded object** — a document of another application held in the drawing as an object frame with a cached image and, on Windows, edited in place through operating-system object linking.
+- **3D reference** — a linked Arc document or IFC, STEP, glTF or Rhino 3DM file placed in model space.
 - **Search path set** — the ordered project and support folders used to resolve references.
 
 ## Drawing references
@@ -48,7 +49,7 @@ paths for whole projects without opening a window.
 | DB-XREF-019 | Image adjustments (`IMAGEADJUST`) | Sets brightness, contrast and fade per image; transparent pixels of PNG and TIFF images show the drawing behind when transparency is on. | T1 | 1 |
 | DB-XREF-020 | Image display quality | Displays large images through tiled, multi-resolution caching so zooming stays responsive; plotting always uses full resolution. | T2 | 1 |
 | DB-XREF-021 | Draw order of images | Images take part in draw order with other objects, typically sent behind linework. | T1 | 1 |
-| DB-XREF-022 | Preserved embedded objects | Embedded OLE frames read from DWG are preserved and displayed and plotted from their cached image; their contents are not editable. | T2 | 1 |
+| DB-XREF-022 | Preserved embedded objects | Embedded object frames read from DWG are preserved and displayed and plotted from their cached image on every platform; editing their contents is available only where DB-XREF-031 applies. | T2 | 1 |
 
 ## Underlays
 
@@ -59,7 +60,7 @@ paths for whole projects without opening a window.
 | DB-XREF-025 | Underlay layers | Layers embedded in a PDF underlay are listed and turned on or off individually within the host drawing. | T2 | 2 |
 | DB-XREF-026 | Underlay snapping | Object snaps (endpoint, midpoint, nearest, perpendicular, intersection and others) work on vector geometry inside underlays, and can be switched off per drawing. | T2 | 2 |
 | DB-XREF-027 | PDF import (`PDFIMPORT`) | Converts the vector content of a PDF page or underlay into polylines, hatches, solid fills, text and images on layers mapped from the PDF; text drawn as shape-font strokes can be recognized and converted to text objects; raster content is optional. | T2 | 2 |
-| DB-XREF-028 | DGN and DWF underlays | Links DGN and DWF files as underlays with layer control and snapping, subject to a published specification for the format version. | T3 | 3 |
+| DB-XREF-028 | DGN and DWF underlays | Links DGN V7 files (read through [DB-INTEROP-033](19-interoperability-standards.md)) and DWF files as underlays with layer control and snapping; later DGN versions and DWF are subject to a published specification for the format version. | T3 | 3 |
 
 ## 3D references
 
@@ -67,3 +68,12 @@ paths for whole projects without opening a window.
 |---|---|---|---|---|
 | DB-XREF-029 | Attach Arc documents and open 3D formats | Links other Arc documents and IFC, STEP or glTF files as 3D references in model space, positioned by insertion point or by shared coordinates, with object snaps on their geometry and clipping. | T2 | 3 |
 | DB-XREF-030 | 3D reference updates | 3D references reload when the source changes and keep their placement; elements in an Arc document or IFC reference show their properties when selected. | T2 | 3 |
+| DB-XREF-034 | Rhino 3DM reference | Links Rhino 3DM files as 3D references through the open reader of [DB-INTEROP-034](19-interoperability-standards.md), with units, layers and object names mapped, snapping on curves and meshes, clipping, and reload when the source changes. | T3 | 5 |
+
+## Embedded objects
+
+| ID | Capability | Behavior | Tier | Phase |
+|---|---|---|---|---|
+| DB-XREF-031 | Embedded objects with edit in place on Windows | On Windows, `INSERTOBJ` inserts a new or an existing document of another application as an embedded or linked object; activating it edits the content in place or in the other application's window where the platform provides that, and the cached image refreshes when editing ends. Elsewhere the object is preserved and shown ([DB-XREF-022](12-references-underlays.md)). | T3 | 5 |
+| DB-XREF-032 | Embedded object trust | A foreign component starts only after the user confirms for that object or for a trusted location; link paths are listed by `OLELINKS` with update, change-source and break actions; a setting turns activation off, and headless runs never start a foreign component. | T3 | 5 |
+| DB-XREF-033 | Embedded object properties | Size, crop, scale, rotation, layer, draw order and plot quality of an embedded object are set like those of an image; the object plots from its cached image and writes back to DWG as an object frame other applications can open. | T3 | 5 |

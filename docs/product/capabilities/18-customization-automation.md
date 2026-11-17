@@ -15,6 +15,7 @@ is undoable.
 - **Script** — a SCR text file of command-line input.
 - **Recorded macro** — a documented text file of recorded commands, inputs, pauses and messages.
 - **Lisp routine** — LSP source loaded into the out-of-process Lisp-dialect interpreter, optionally with DCL dialog definitions.
+- **Automation bridge** — a Windows-only separate process that exposes the DraftBuilder object model to component-automation clients and maps their calls onto registered commands.
 - **Plug-in package** — a WebAssembly module with a manifest of requested capabilities and host-assigned trust.
 - **Trusted location** — a folder from which executable content may load without confirmation.
 
@@ -74,6 +75,17 @@ is undoable.
 | DB-AUTO-030 | Headless command-line application | `draftbuilder-cli` opens drawings without a display to convert, validate, audit, plot, publish, run scripts, Lisp routines and recorded macros over a file set, and serve the automation protocol; each run returns an exit code and a machine-readable report. | T1 | 1 |
 | DB-AUTO-031 | Batch runs with dry run | Batch jobs over folders or file lists run in parallel per file, can run in a dry-run mode that reports intended changes without saving, and continue past failing files with per-file results. | T2 | 2 |
 | DB-AUTO-032 | Deterministic replay | A recorded command sequence replayed on the same drawing produces the same result on every platform, so automation outputs can be verified in continuous integration. | T3 | 2 |
+
+## Windows automation bridge
+
+| ID | Capability | Behavior | Tier | Phase |
+|---|---|---|---|---|
+| DB-AUTO-038 | COM automation bridge | On Windows, a separate process registers an automation server that exposes the application, documents, spaces, collections, entities, layers, styles, blocks, layouts and selection sets to component-automation clients such as script hosts, spreadsheets and managed code. It is a client of the Arc Automation Protocol and never loads the drawing database ([ADR-0008](../../adr/0008-windows-integration-crate.md)). | T3 | 5 |
+| DB-AUTO-039 | Mapping onto the command model | Every property write and method call of the object model maps onto registered commands or protocol queries and runs as one transaction; a call with no mapping fails with a named error, and the mapping table is published and diffable. | T3 | 5 |
+| DB-AUTO-040 | Existing automation scripts | Scripts and macros written against the conventional application object model run through the bridge when they use mapped members; a coverage report lists unmapped members of a script before it runs, and the command model, not the script, decides each result. | T3 | 5 |
+| DB-AUTO-041 | Bridge events | Document and command events (opened, saved, object modified or erased, command started and ended) reach bridge clients with the limits of [DB-AUTO-023](18-customization-automation.md); handlers cannot modify the drawing from inside an event. | T3 | 5 |
+| DB-AUTO-042 | Bridge security | The server accepts only local callers of the same user, asks once per client before the first connection and records trusted clients, honors trusted locations and the permissions of the protocol, and never opens a dialog during a call. | T3 | 5 |
+| DB-AUTO-043 | Headless bridge | The command-line application can host the bridge without a display so batch scripts and server-side jobs on Windows use the same object model; each run returns an exit code and a machine-readable report. | T3 | 5 |
 
 ## Extension and assistance
 

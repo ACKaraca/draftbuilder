@@ -31,8 +31,10 @@ public specification documents about these features and deciding the user-facing
 
 Is a published specification available that covers the DGN versions users exchange? Affects
 [DB-INTEROP-016](capabilities/19-interoperability-standards.md) and
-[DB-XREF-028](capabilities/12-references-underlays.md). Closed by a specification review; without
-one, the rows are withdrawn and exchange goes through DWG, DXF and PDF.
+[DB-XREF-028](capabilities/12-references-underlays.md). DGN V7 is read from its published specification
+([DB-INTEROP-033](capabilities/19-interoperability-standards.md)); the question remains open for later
+versions. Closed by a specification review; without one, those versions are exchanged through a
+connector, DWG, DXF or PDF.
 
 ### OQ-05 DWF and DWFx
 
@@ -212,6 +214,29 @@ of PDF annotation types and alignment methods.
 What identity is recorded in activity history when no Hub account is connected, and how is it
 reconciled later? Affects [DB-COLLAB-011](capabilities/17-compare-history-collaboration.md). Closed
 by a privacy review and a decision on local user identity.
+
+## Web, mobile and platform integration
+
+### OQ-31 Storage and memory limits on browser and mobile targets
+
+How large can an offline replica and a loaded drawing be on each target, and what reduced mode is
+acceptable beyond the budget? Affects [DB-WEB-007](capabilities/28-web-and-mobile.md) and
+[DB-WEB-027](capabilities/28-web-and-mobile.md). Closed by measuring corpus drawings on reference
+browsers and devices and recording the per-target budgets.
+
+### OQ-32 Command availability by stage
+
+Which commands belong to stage 2 light editing, and which stage-3 commands need input methods that
+touch cannot provide precisely? Affects [DB-WEB-004](capabilities/28-web-and-mobile.md),
+[DB-WEB-023](capabilities/28-web-and-mobile.md) and [DB-WEB-024](capabilities/28-web-and-mobile.md).
+Closed by usability trials on tablets and phones and a published availability table.
+
+### OQ-33 Automation object-model coverage
+
+Which members of the conventional automation object model must map for the scripts in use, and which
+cannot map onto the command model? Affects [DB-AUTO-039](capabilities/18-customization-automation.md)
+and [DB-AUTO-040](capabilities/18-customization-automation.md). Closed by a survey of the member
+usage in existing scripts and a published mapping table with its coverage.
 
 ## Performance
 

@@ -17,9 +17,11 @@ supported in release notes.
 | DXF (ASCII and binary) | edit | edit | 1 | Native format, implemented from the published DXF reference ([DB-INTEROP-003](../product/capabilities/19-interoperability-standards.md)) |
 | DWT template | edit | edit | 1 | A DWG used as a template ([DB-AUTO-008](../product/capabilities/18-customization-automation.md)) |
 | DWS standards file | data | data | 2 | A DWG holding standard layers and styles ([DB-INTEROP-024](../product/capabilities/19-interoperability-standards.md)) |
-| DGN | view | view | 3 | Subject to a published specification ([OQ-04](../product/open-questions.md)) |
+| DGN V7 | view and data (read); view (underlay) | — | 3 underlay, 5 read | From its published specification ([DB-INTEROP-033](../product/capabilities/19-interoperability-standards.md), [DB-XREF-028](../product/capabilities/12-references-underlays.md)) |
+| Later DGN versions | view | view | 3 | Subject to a published specification ([OQ-04](../product/open-questions.md)) |
 | `.draftb` sidecar package | edit | edit | 1 | Journal history, recovery journal, settings, Hub metadata; a documented SQLite schema |
 | Other Arc documents | view | — | 3 | Attached as references through the Arc document package ([DB-XREF-029](../product/capabilities/12-references-underlays.md)) |
+| Arc exchange package | data | data | 5 | Written and read by connectors inside other applications ([DB-INTEROP-035](../product/capabilities/19-interoperability-standards.md)); specified in `arc-core` |
 
 ### Sheets, images and documents
 
@@ -47,6 +49,7 @@ supported in release notes.
 | Lisp source (LSP) and dialog definitions (DCL) | data | — | 2 | [DB-AUTO-015](../product/capabilities/18-customization-automation.md) |
 | Layer state files (LAS) | data | data | 1 | [DB-LAYER-012](../product/capabilities/07-layers-properties.md) |
 | UI customization files of other applications | — | — | — | Decision in [OQ-08](../product/open-questions.md) |
+| Embedded objects (object-linking frames) | view, edit in place on Windows | view | 1 preserve, 5 edit | [DB-XREF-022](../product/capabilities/12-references-underlays.md), [DB-XREF-031](../product/capabilities/12-references-underlays.md) |
 | CSV, XLSX | data | data | 2 | Data links, extraction, table export ([DB-INTEROP-018](../product/capabilities/19-interoperability-standards.md)) |
 | KML, KMZ | data (location) | data | 3 | [DB-INTEROP-017](../product/capabilities/19-interoperability-standards.md) |
 
@@ -57,10 +60,12 @@ supported in release notes.
 | STEP, IGES | data (solids and surfaces) | data | 3 | Through `arc-brep` ([DB-INTEROP-012](../product/capabilities/19-interoperability-standards.md)) |
 | SAT | data | data | 3 | Subject to specification availability ([OQ-07](../product/open-questions.md)) |
 | IFC | view and data as reference | — | 3 | [DB-INTEROP-011](../product/capabilities/19-interoperability-standards.md) |
+| Rhino 3DM | view and data | — | 5 | Through a permissively licensed open reader ([DB-INTEROP-034](../product/capabilities/19-interoperability-standards.md), [DB-XREF-034](../product/capabilities/12-references-underlays.md)) |
 | glTF, OBJ, STL, 3MF, OpenUSD | view (meshes) | view | 3 | [DB-INTEROP-014](../product/capabilities/19-interoperability-standards.md), [DB-M3D-051](../product/capabilities/15-3d-modeling-visualization.md) |
 | Arc Scene | — | view and materials | 4 | Rendering through RenderBuilder ([DB-INTEROP-015](../product/capabilities/19-interoperability-standards.md)) |
 | LAS, LAZ, E57 | view | — | 3 | [DB-REAL-001](../product/capabilities/16-point-clouds-geolocation.md) |
 | IES photometric files | data | — | 4 | Light distributions ([DB-M3D-042](../product/capabilities/15-3d-modeling-visualization.md)) |
+| Video (WebM, MP4 with open codecs) | — | view | 5 | Camera paths and walkthroughs ([DB-M3D-052](../product/capabilities/15-3d-modeling-visualization.md)) |
 
 ## Mapping principles
 
@@ -98,14 +103,32 @@ object class: preserved unchanged, mapped, approximated (with method), dropped (
 invalidated foreign data. It is shown interactively, returned as structured data by the automation
 protocol and written as JSON by the CLI, so pipelines can fail on unexpected losses.
 
+## Formats without a published specification
+
+A proprietary format with a published specification or a permissively licensed open reader is read
+natively behind an `arc-io-*` crate (DGN V7, Rhino 3DM). For every other proprietary format the
+exchange goes through one of two routes defined by
+[ADR-0017](https://github.com/ACKaraca/arc-suite/blob/main/docs/adr/0017-exchange-connectors-and-licensed-bridges.md):
+
+- **Connectors.** A connector is an add-in that runs inside the user's own licensed copy of the other
+  application, uses only its public API and writes or reads the Arc exchange package, which
+  DraftBuilder opens with geometry, properties and identifiers ([DB-INTEROP-035](../product/capabilities/19-interoperability-standards.md)).
+- **Licensed bridges.** A conversion library that its owner licenses to the user runs as a separate
+  process; it is never distributed with DraftBuilder or required for a core workflow
+  ([DB-INTEROP-036](../product/capabilities/19-interoperability-standards.md)).
+
+Both routes produce loss reports like every other import and export.
+
 ## Deliberately unsupported
+
+Reverse engineering undocumented formats or binaries is excluded because of the legal risk it carries;
+the rows below follow from that rule or from license terms.
 
 | Format or mechanism | Reason | Exchanged instead through |
 |---|---|---|
-| Proprietary BIM, mechanical and coordination model formats without a published specification | Never reverse engineered | IFC, STEP, glTF, OpenUSD |
-| Proprietary point cloud project formats | No published specification | E57, LAS, LAZ |
-| FBX | Available only through a proprietary SDK | glTF, OpenUSD |
+| Proprietary formats without a published specification or open reader, read directly | Never reverse engineered | Connectors, licensed bridges, IFC, STEP, glTF, OpenUSD |
+| Proprietary point cloud project formats read directly | No published specification | E57, LAS, LAZ, or a connector |
+| FBX read directly | Available only through a proprietary SDK | glTF, OpenUSD |
 | Compiled protected Lisp files | Undocumented compiled format | Lisp source files |
-| Embedded documents of other applications | One-platform component technology | Preserved and shown with their stored image |
-| Proprietary raster codecs without open specification | Licensing | GeoTIFF, TIFF, PNG, JPEG |
-| Video output of camera paths | Rendering belongs to RenderBuilder | Image sequences rendered by RenderBuilder |
+| Compiled native add-ins of other applications | Bound to another application's proprietary runtime libraries | WebAssembly plug-ins, the automation protocol, the Windows automation bridge |
+| Raster codecs whose license forbids open distribution | License | GeoTIFF, TIFF, PNG, JPEG |

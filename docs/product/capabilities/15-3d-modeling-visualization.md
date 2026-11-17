@@ -100,7 +100,16 @@ through RenderBuilder over the Arc Scene contract.
 | DB-M3D-047 | Material mapping | Planar, box, cylindrical and spherical mapping are applied and adjusted with a gizmo, including tiling, offset, rotation and scale. | T2 | 4 |
 | DB-M3D-048 | Rendering through RenderBuilder | Rendering exports an Arc Scene of the current view to a RenderBuilder process and shows returned frames in a render window; presets set quality, the target is the window, a viewport region or a file, and render history is kept. When RenderBuilder is not installed the command explains how to obtain it. | T2 | 4 |
 | DB-M3D-049 | Backgrounds and environment | Named views have solid, gradient, image or sun-and-sky backgrounds; image-based lighting environments and depth cueing are passed to the renderer. | T2 | 4 |
-| DB-M3D-050 | Camera path sequences | A camera moves along a path or between named views to produce a frame sequence rendered by RenderBuilder; DraftBuilder does not encode video. | T3 | 4 |
+| DB-M3D-050 | Camera path sequences | A camera moves along a path or between named views to produce a frame sequence rendered by RenderBuilder, which can also be encoded as video (DB-M3D-052). | T3 | 4 |
+
+## Video output
+
+| ID | Capability | Behavior | Tier | Phase |
+|---|---|---|---|---|
+| DB-M3D-052 | Video from camera paths | A camera path or a recorded walkthrough renders through RenderBuilder and is encoded to a video file in a WebM or MP4 container with an openly licensed codec; resolution, frame rate, frame range, quality preset and output file are set in the command. | T3 | 5 |
+| DB-M3D-053 | Viewport-rendered video | The same path can be captured from the viewport renderer with the active visual style, for fast previews and drawings without photoreal settings; the output has the same container, codec and settings as DB-M3D-052. | T3 | 5 |
+| DB-M3D-054 | Walkthrough recording | A walk or fly navigation session ([DB-M3D-038](15-3d-modeling-visualization.md)) records into a camera path with keyframes that can be edited, retimed and smoothed, and replays deterministically. | T3 | 5 |
+| DB-M3D-055 | Video output control and headless runs | Video jobs run in the background with progress and cancel, resume after interruption from the frames already written, and run from the command-line application and Arc Hub jobs; a codec whose license forbids open distribution is used only when the user installs an encoder separately. | T3 | 5 |
 
 ## Output for fabrication
 
