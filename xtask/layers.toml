@@ -1,0 +1,45 @@
+# The layer table of DraftBuilder: the same rules and file format as arc-core's
+# xtask/layers.toml (ADR-0001 of arc-core). `cargo xtask layers` checks the workspace against it.
+# The layers are this repository's own: the drawing database, the format mapping, the commands.
+
+# Crates that nothing in the headless layers may reach through normal dependencies.
+ui_deny = [
+  "winit",
+  "wgpu",
+  "egui",
+  "eframe",
+  "egui_dock",
+  "accesskit",
+  "muda",
+  "rfd",
+  "raw-window-handle",
+]
+
+# The crates of arc-core (one pinned revision, see the workspace manifest) and the third-party
+# crates a workspace crate may depend on directly. Third-party versions follow the arc-core lock.
+third_party = [
+  "arc-app",
+  "arc-base",
+  "arc-command",
+  "arc-doc",
+  "arc-draft",
+  "arc-draft-dxf",
+  "arc-geom",
+  "arc-gpu",
+  "arc-io-dxf",
+  "arc-ui",
+  "image",
+  "schemars",
+  "serde",
+  "serde_json",
+  "toml",
+]
+
+# Class of every workspace crate: layer(n), ffi(n), app, testkit or tool.
+[crates]
+draftbuilder-model = "layer(0)"
+draftbuilder-io = "layer(1)"
+draftbuilder-commands = "layer(2)"
+draftbuilder = "app"
+draftbuilder-cli = "app"
+xtask = "tool"

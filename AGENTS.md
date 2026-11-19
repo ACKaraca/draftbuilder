@@ -6,7 +6,10 @@ vocabulary, scripts and Lisp routines. Rust only; depends on `arc-core`, never o
 
 ## Status and where to start
 
-Design phase: no code and no builds yet. Read in this order: [docs/README.md](docs/README.md),
+Milestone M0 (foundation readiness): the Cargo workspace, `xtask`, the headless crates
+`draftbuilder-model`, `-io` and `-commands`, the headless CLI and the windowed application exist and
+build on one pinned revision of `arc-core`; every other crate and capability is still a
+specification. Read in this order: [docs/README.md](docs/README.md),
 [docs/product/vision.md](docs/product/vision.md),
 [docs/product/capabilities/README.md](docs/product/capabilities/README.md),
 [docs/architecture/overview.md](docs/architecture/overview.md),
@@ -14,31 +17,52 @@ Design phase: no code and no builds yet. Read in this order: [docs/README.md](do
 [docs/architecture/dwg-compatibility.md](docs/architecture/dwg-compatibility.md),
 [docs/architecture/command-line.md](docs/architecture/command-line.md), [docs/adr/](docs/adr/README.md).
 
-## Repository layout (target)
+## Repository layout
+
+Present:
 
 ```
-crates/draftbuilder-model/     drawing database, preservation, associativity, settings (headless)
-crates/draftbuilder-commands/  commands, prompt machines, aliases (headless)
-crates/draftbuilder-io/        DWG/DXF and other format mappings, loss reports (headless)
+crates/draftbuilder-model/     handles, fingerprint, stable IDs, handle table over arc-doc (headless)
+crates/draftbuilder-io/        DXF mapping: source handles, GUIDs, loss items (headless)
+crates/draftbuilder-commands/  document type set, open and save DXF, move (headless)
+apps/draftbuilder/             desktop application (wiring only, over the arc-app shell)
+apps/draftbuilder-cli/         headless CLI: shared subcommands, `session`, `render`
+xtask/                         layers, catalogs, ci
+locales/en-US/                 message catalogs, one per crate that has messages
+```
+
+Planned, not created yet:
+
+```
 crates/draftbuilder-lisp/      Lisp-dialect interpreter (headless, protocol client)
 crates/draftbuilder-toolset/   toolset framework (headless, phase 4)
 crates/draftbuilder-ui/        tools, panels, cursor input, grips (egui)
 toolsets/<name>/               one crate per toolset
-apps/draftbuilder/             desktop application (wiring only)
-apps/draftbuilder-cli/         headless CLI and automation protocol server
 apps/draftbuilder-lisp/        out-of-process Lisp host
-docs/                          product, architecture, roadmap, ADRs
-xtask/                         workspace tasks
 ```
+
+The foundation is `arc-core`, pinned by revision in the workspace `Cargo.toml` (declared once in
+`[workspace.dependencies]`, never as a path). Toolchain, lint table and `deny.toml` follow
+`arc-core`; the layer table is `xtask/layers.toml`.
 
 ## Commands
 
-No build exists yet. Once code lands, these apply:
+The toolchain is pinned in `rust-toolchain.toml`; the gate also needs `cargo-nextest`,
+`cargo-deny` and `cargo-audit`.
 
-- `cargo fmt --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo nextest run --workspace`
-- `cargo xtask layers`
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo nextest run --workspace --all-features` (`cargo test --workspace --doc` for documentation tests)
+- `cargo xtask layers` and `cargo xtask catalogs` (single gates of `ci`)
+- `cargo xtask ci` runs all gates, including `cargo deny check` and `cargo audit`. CI runs it when
+  started by hand, once per batch of changes: on Windows by default, on Linux, Windows and macOS on
+  request.
+- `cargo run -p draftbuilder-cli -- session <file.draftb> --save --allow-edit --read-root <dir>
+  --write-root <dir>` runs a script of JSON lines from standard input: `open_dxf`, `move`, `undo`,
+  `save_dxf` (see [architecture overview](docs/architecture/overview.md#implemented-in-m0)).
+- `cargo run -p draftbuilder-cli -- render <file.draftb> --output <png> --write-root <dir>` draws the
+  model space headless. The rendering test needs a graphics adapter (on Linux the software Vulkan
+  driver `mesa-vulkan-drivers`) and skips without one.
 
 ## Suite rules
 

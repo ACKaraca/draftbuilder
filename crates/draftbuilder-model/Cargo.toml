@@ -1,0 +1,17 @@
+[package]
+name = "draftbuilder-model"
+description = "The drawing database of DraftBuilder: handles, stable identifiers and the handle table over the arc-doc store (headless)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+arc-base = { workspace = true }
+arc-doc = { workspace = true }
+arc-draft = { workspace = true }
+
+[lints]
+workspace = true

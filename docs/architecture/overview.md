@@ -197,6 +197,30 @@ run as Arc Hub jobs through the CLI.
 See [command-line.md](command-line.md) and
 [18-customization-automation.md](../product/capabilities/18-customization-automation.md).
 
+## Implemented in M0
+
+Milestone M0 ([roadmap](../roadmap.md)) built the part of the structure above that proves the
+mapping onto `arc-doc` and `arc-draft`. Everything not listed here is still design.
+
+| Part | State |
+|---|---|
+| Crates | `draftbuilder-model`, `-io`, `-commands`, `apps/draftbuilder` (over the `arc-app` shell, without a `draftbuilder-ui` crate: the viewport, outliner, property grid and command line panels of `arc-app` are enough), `apps/draftbuilder-cli`, `xtask`. The foundation is one pinned revision of `arc-core`. |
+| Document type set | The drafting types of `arc-draft`. The drawing database adds no object types yet. |
+| Handles and fingerprint | `draftbuilder-model` keeps them as `arc-doc` foreign data rows of the format `dxf`: a handle table (source-map records that bind an object to its handle), the highest handle the drawing has had, and the fingerprint with its origin (file or assigned). Rows are journaled, undone with the commands that wrote them and saved in the package. Rows of deleted objects stay, so a handle is not issued again. |
+| Stable IDs | `stable_id` computes the version 5 UUID over the fingerprint and the handle (ADR-0002). Nothing is stored for it, and the journal still addresses objects by their `arc-doc` identifier. |
+| Open | `draftbuilder.drawing.open_dxf` reads the file with `arc-io-dxf`, plans the import with `arc-draft-dxf` and applies it in one undoable transaction. Each model space entity is bound to its source handle by creation order. Entities of blocks do not carry handles yet. |
+| Save | `draftbuilder.drawing.save_dxf` exports the model space with `arc-draft-dxf`, writes each bound entity with its source handle, keeps the fingerprint (or assigns one and says so in the report), writes a new version GUID on every save and a new fingerprint for an independent copy. Entities without a bound handle (created in the session) are written with handles above the drawing's highest handle and reported. Tables, layers, block records and objects of the OBJECTS section are written with handles the export assigns. |
+| Reports | The loss and preservation report of `arc-io-dxf` and `arc-draft-dxf` is returned by both commands with the product items `db.io.handle_assigned`, `db.io.handle_duplicate` and `db.io.fingerprint_assigned`. |
+| Move | `draftbuilder.modify.move` moves points, texts, block references and every entity with curve geometry by an offset; other types are refused with an explanation. |
+| CLI | The shared subcommands of the Arc suite, `session` (one JSON request per line on standard input: a command, `undo`, `redo` or `{"list": "entities"}`) and `render` (the model space to PNG). |
+| Working file | The CLI works on a document package with the extension `draftb`, which holds the drawing database of an opened DXF drawing so that several processes can work on it. The sidecar of [ADR-0001](../adr/0001-drawing-database-is-the-model.md), which accompanies the native `.dxf` file, is not built yet. |
+
+Known limits of the prototype: undo history does not survive a restart, so `undo` runs inside one
+`session`; the documents a shared subcommand opens carry no drafting validators; new objects get
+their handles when the drawing is saved, not when they are created; and the handle high-water mark
+stored in the document is a transaction like any other, so a later process that opens a package
+after an undo can continue from a lower mark than an earlier process reached.
+
 ## Testing strategy
 
 - **Round-trip corpus.** DWG and DXF files from the suite corpus repositories, each with owner,

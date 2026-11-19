@@ -1,0 +1,384 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$HANDSEED
+  5
+200
+  9
+$INSUNITS
+ 70
+4
+  9
+$FINGERPRINTGUID
+  2
+{3E7A9C14-5B2D-4F68-A1C3-90D2E8B47F15}
+  9
+$VERSIONGUID
+  2
+{B8D41F07-6C93-4E1A-9A52-7D0E3C6A18F4}
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LTYPE
+  5
+1
+100
+AcDbSymbolTable
+ 70
+1
+  0
+LTYPE
+  5
+10
+100
+AcDbSymbolTableRecord
+100
+AcDbLinetypeTableRecord
+  2
+CONTINUOUS
+ 70
+0
+  3
+Solid line
+ 72
+65
+ 73
+0
+ 40
+0.0
+  0
+ENDTAB
+  0
+TABLE
+  2
+LAYER
+  5
+2
+100
+AcDbSymbolTable
+ 70
+3
+  0
+LAYER
+  5
+11
+100
+AcDbSymbolTableRecord
+100
+AcDbLayerTableRecord
+  2
+0
+ 70
+0
+ 62
+7
+  6
+CONTINUOUS
+  0
+LAYER
+  5
+12
+100
+AcDbSymbolTableRecord
+100
+AcDbLayerTableRecord
+  2
+WALLS
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+LAYER
+  5
+13
+100
+AcDbSymbolTableRecord
+100
+AcDbLayerTableRecord
+  2
+NOTES
+ 70
+0
+ 62
+3
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+TABLE
+  2
+STYLE
+  5
+3
+100
+AcDbSymbolTable
+ 70
+1
+  0
+STYLE
+  5
+14
+100
+AcDbSymbolTableRecord
+100
+AcDbTextStyleTableRecord
+  2
+STANDARD
+ 70
+0
+ 40
+0.0
+ 41
+1.0
+ 50
+0.0
+ 71
+0
+ 42
+2.5
+  3
+txt
+  4
+
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LINE
+  5
+100
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbLine
+ 10
+0
+ 20
+0
+ 30
+0.0
+ 11
+100
+ 21
+0
+ 31
+0.0
+  0
+LINE
+  5
+101
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbLine
+ 10
+100
+ 20
+0
+ 30
+0.0
+ 11
+100
+ 21
+60
+ 31
+0.0
+  0
+ARC
+  5
+102
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbCircle
+ 10
+130
+ 20
+30
+ 30
+0.0
+ 40
+20
+100
+AcDbArc
+ 50
+0.0
+ 51
+180
+  0
+LWPOLYLINE
+  5
+103
+100
+AcDbEntity
+  8
+NOTES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0.0
+ 10
+0
+ 20
+70
+ 10
+40
+ 20
+70
+ 10
+40
+ 20
+90
+ 42
+0.5
+ 10
+0
+ 20
+90
+  0
+POLYLINE
+  5
+104
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDb2dPolyline
+ 66
+1
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+ 70
+0
+  0
+VERTEX
+  5
+105
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbVertex
+100
+AcDb2dVertex
+ 10
+50
+ 20
+70
+ 30
+0.0
+ 70
+0
+  0
+VERTEX
+  5
+106
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbVertex
+100
+AcDb2dVertex
+ 10
+80
+ 20
+70
+ 30
+0.0
+ 70
+0
+  0
+VERTEX
+  5
+107
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbVertex
+100
+AcDb2dVertex
+ 10
+80
+ 20
+90
+ 30
+0.0
+ 70
+0
+  0
+SEQEND
+  5
+108
+100
+AcDbEntity
+  8
+WALLS
+  0
+TEXT
+  5
+109
+100
+AcDbEntity
+  8
+NOTES
+100
+AcDbText
+ 10
+10
+ 20
+100
+ 30
+0.0
+ 40
+5
+  1
+DraftBuilder
+  7
+STANDARD
+100
+AcDbText
+  0
+ENDSEC
+  0
+EOF

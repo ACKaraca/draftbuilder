@@ -1,0 +1,21 @@
+[package]
+name = "draftbuilder-io"
+description = "DraftBuilder's mapping between the drawing database and DXF, with the preservation report (headless)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+arc-base = { workspace = true }
+arc-doc = { workspace = true }
+arc-draft = { workspace = true }
+arc-draft-dxf = { workspace = true }
+arc-io-dxf = { workspace = true }
+draftbuilder-model = { path = "../draftbuilder-model" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

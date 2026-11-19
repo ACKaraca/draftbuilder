@@ -1,0 +1,71 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "Apache-2.0"
+repository = "https://github.com/ACKaraca/draftbuilder"
+publish = false
+
+# The foundation is one pinned revision of arc-core (a tagged release once there is one). Every
+# crate of it is declared here once; products never use path dependencies in committed files.
+# Third-party versions follow the arc-core lock; every crate listed must also appear in
+# xtask/layers.toml.
+[workspace.dependencies]
+arc-base = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-geom = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-doc = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-command = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-draft = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-draft-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-app = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-gpu = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-ui = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+arc-io-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "a08e80b7d7baa0e1ef31f5d082f381b600f34a83" }
+
+# Image decoding in tests and PNG output only; every other format stays off (as in arc-core).
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+schemars = { version = "1.2.3", default-features = false, features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip`: a number read back from JSON is the number that was written.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+toml = "1"
+
+# The suite lint table (arc-suite docs/engineering/coding-standards.md), as in arc-core. Every
+# crate inherits it with `[lints] workspace = true`; `cargo xtask layers` fails a crate that
+# does not.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[workspace.lints.clippy]
+# No-panic policy (tests are exempted in clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+# Diagnostics output.
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+# Hygiene.
+wildcard_imports = "deny"
+mem_forget = "deny"
+exit = "deny"
+# Complexity.
+cognitive_complexity = "warn"
+too_many_arguments = "warn"
+too_many_lines = "warn"
+# Casting.
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"

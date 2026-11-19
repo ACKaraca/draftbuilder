@@ -2,7 +2,7 @@
 
 2D drafting and 3D CAD on the DWG/DXF drawing data model, part of the Arc suite.
 
-> **Status: design phase.** No builds are available yet. This repository contains the product definition, architecture and roadmap that implementation follows.
+> **Status: foundation phase.** No release builds are available. This repository contains the product definition, architecture and roadmap that implementation follows, and the first code (milestone M0): a drawing database prototype that opens a DXF drawing, moves objects with undo and saves DXF with the handles of the source ([AGENTS.md](AGENTS.md) lists what exists).
 
 ## What DraftBuilder is
 

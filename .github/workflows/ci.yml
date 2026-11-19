@@ -1,0 +1,44 @@
+name: ci
+
+# Started by hand, once per batch of changes, to keep runner time low. Development targets Windows for
+# now, so one Windows job is the default; "all" adds Linux and macOS.
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to run on
+        type: choice
+        options: [windows, all]
+        default: windows
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer run replaces one in progress: only the latest state is worth the runner time.
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: cargo xtask ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.platforms == 'all' && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["windows-latest"]') }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned toolchain
+        run: rustup toolchain install || rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-nextest,cargo-deny,cargo-audit
+      - name: Install the software Vulkan driver for the rendering test
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
+      - run: cargo xtask ci

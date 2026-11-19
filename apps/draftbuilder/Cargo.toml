@@ -1,0 +1,23 @@
+[package]
+name = "draftbuilder"
+description = "The DraftBuilder desktop application: the DraftBuilder document types in the Arc windowed shell (wiring only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+arc-app = { workspace = true, features = ["window"] }
+arc-base = { workspace = true }
+arc-command = { workspace = true }
+arc-doc = { workspace = true }
+arc-draft = { workspace = true }
+arc-gpu = { workspace = true, features = ["draft"] }
+arc-ui = { workspace = true }
+draftbuilder-commands = { path = "../../crates/draftbuilder-commands" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

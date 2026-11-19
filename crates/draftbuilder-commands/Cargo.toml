@@ -1,0 +1,26 @@
+[package]
+name = "draftbuilder-commands"
+description = "The commands and the document type set of DraftBuilder: open and save DXF, move (headless)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+arc-base = { workspace = true }
+arc-command = { workspace = true, features = ["headless"] }
+arc-doc = { workspace = true }
+arc-draft = { workspace = true }
+arc-draft-dxf = { workspace = true }
+arc-geom = { workspace = true }
+arc-io-dxf = { workspace = true }
+draftbuilder-io = { path = "../draftbuilder-io" }
+draftbuilder-model = { path = "../draftbuilder-model" }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
