@@ -234,7 +234,7 @@ pub(crate) fn open_drawing(
     // The mapper states the conversion it applied (`draft.dxf.units_converted`, with the source
     // code and the factor) or that it converted nothing (`draft.dxf.units_unitless`); the report
     // carries that item and no other.
-    let plan = plan_with_report(
+    let mut plan = plan_with_report(
         &output.drawing,
         &ImportOptions {
             target_unit: target,
@@ -259,6 +259,15 @@ pub(crate) fn open_drawing(
         created,
         ..
     } = apply(ctx, space, &plan)?;
+    // A file without layer 0 gets the reserved layer, and the report says so.
+    if crate::layer::ensure_layer_zero(ctx)? {
+        draftbuilder_io::report::note(
+            &mut plan.report,
+            draftbuilder_io::error::LAYER_ZERO_CREATED,
+            "layer",
+            1,
+        );
+    }
 
     let bound = created.iter().filter_map(|c| c.source).map(|h| h.0);
     let top = bound.clone().fold(seed_top(&output.drawing), u64::max);

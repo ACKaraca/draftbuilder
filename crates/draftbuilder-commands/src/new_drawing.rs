@@ -161,6 +161,8 @@ fn new_drawing(ctx: &mut Context<'_>, p: NewParams) -> Result<NewResult> {
         }
         None => 0,
     };
+    // The reserved layer 0 of a new drawing (DB-LAYER-005); a template that has one keeps it.
+    crate::layer::ensure_layer_zero(ctx)?;
     let fingerprint = fresh_fingerprint(ctx)?;
     database::set_fingerprint(ctx.txn()?, fingerprint, Origin::Assigned)?;
     Ok(NewResult {

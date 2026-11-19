@@ -31,6 +31,8 @@ pub enum Area {
     Settings,
     /// Coordinate input, snaps and tracking.
     Precision,
+    /// Object properties: changing and matching the appearance of entities.
+    Property,
 }
 
 /// One row of the vocabulary.
@@ -83,6 +85,96 @@ pub const NAMES: &[Name] = &[
         area: Area::Modify,
         typed: Some("MOVE"),
         aliases: &["M"],
+    },
+    Name {
+        id: "draftbuilder.select.filter",
+        area: Area::Select,
+        typed: Some("FILTER"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.create",
+        area: Area::Layer,
+        typed: Some("LAYER"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.on",
+        area: Area::Layer,
+        typed: Some("LAYON"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.off",
+        area: Area::Layer,
+        typed: Some("LAYOFF"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.freeze",
+        area: Area::Layer,
+        typed: Some("LAYFRZ"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.thaw",
+        area: Area::Layer,
+        typed: Some("LAYTHW"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.lock",
+        area: Area::Layer,
+        typed: Some("LAYLCK"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.unlock",
+        area: Area::Layer,
+        typed: Some("LAYULK"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.match",
+        area: Area::Layer,
+        typed: Some("LAYMCH"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.delete_with_contents",
+        area: Area::Layer,
+        typed: Some("LAYDEL"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.layer.merge",
+        area: Area::Layer,
+        typed: Some("LAYMRG"),
+        aliases: &[],
+    },
+    Name {
+        id: "core.draft.linetype.load",
+        area: Area::Layer,
+        typed: Some("LINETYPE"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.property.change",
+        area: Area::Property,
+        typed: Some("CHPROP"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.property.change",
+        area: Area::Property,
+        typed: Some("CHANGE"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.property.match",
+        area: Area::Property,
+        typed: Some("MATCHPROP"),
+        aliases: &[],
     },
 ];
 

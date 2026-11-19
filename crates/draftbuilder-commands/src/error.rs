@@ -42,6 +42,69 @@ pub mod codes {
         category: Category::Conflict,
         message_id: "db-cmd-target-not-file",
     };
+    /// A selection geometry or filter is not usable: a polygon or fence with too few or too many
+    /// vertices or no enclosed area, or a filter over its limits or with a bad test. The detail
+    /// `reason` names which.
+    pub const SELECTION_INVALID: ErrorCode = ErrorCode {
+        code: "db.cmd.selection_invalid",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-selection-invalid",
+    };
+    /// A selection or an edit would take more objects than the command allows.
+    pub const LIMIT_EXCEEDED: ErrorCode = ErrorCode {
+        code: "db.cmd.limit_exceeded",
+        category: Category::LimitExceeded,
+        message_id: "db-cmd-limit-exceeded",
+    };
+    /// No layer has the name given.
+    pub const LAYER_UNKNOWN: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_unknown",
+        category: Category::NotFound,
+        message_id: "db-cmd-layer-unknown",
+    };
+    /// No linetype has the name given.
+    pub const LINETYPE_UNKNOWN: ErrorCode = ErrorCode {
+        code: "db.cmd.linetype_unknown",
+        category: Category::NotFound,
+        message_id: "db-cmd-linetype-unknown",
+    };
+    /// A layer name uses a character or a length that the drawing format does not allow.
+    pub const NAME_INVALID: ErrorCode = ErrorCode {
+        code: "db.cmd.name_invalid",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-name-invalid",
+    };
+    /// A property value is outside its range.
+    pub const VALUE_INVALID: ErrorCode = ErrorCode {
+        code: "db.cmd.value_invalid",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-value-invalid",
+    };
+    /// A property command names no property to change.
+    pub const NOTHING_TO_CHANGE: ErrorCode = ErrorCode {
+        code: "db.cmd.nothing_to_change",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-nothing-to-change",
+    };
+    /// A layer name is already used by another layer, compared without regard to case.
+    pub const NAME_TAKEN: ErrorCode = ErrorCode {
+        code: "db.cmd.name_taken",
+        category: Category::Conflict,
+        message_id: "db-cmd-name-taken",
+    };
+    /// The layer is layer `0` or the definition-point layer, which cannot be renamed, deleted or
+    /// merged away.
+    pub const LAYER_SPECIAL: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_special",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-special",
+    };
+    /// The layer holds objects, so it cannot be deleted by itself.
+    pub const LAYER_IN_USE: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_in_use",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-in-use",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         DRAWING_NOT_EMPTY,
@@ -50,6 +113,16 @@ pub mod codes {
         FORMAT_MISMATCH,
         FORMAT_UNSUPPORTED,
         TARGET_NOT_FILE,
+        SELECTION_INVALID,
+        LIMIT_EXCEEDED,
+        LAYER_UNKNOWN,
+        LINETYPE_UNKNOWN,
+        NAME_INVALID,
+        VALUE_INVALID,
+        NOTHING_TO_CHANGE,
+        NAME_TAKEN,
+        LAYER_SPECIAL,
+        LAYER_IN_USE,
     ];
 }
 

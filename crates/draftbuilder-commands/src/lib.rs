@@ -33,6 +33,7 @@ pub mod names;
 pub mod new_drawing;
 pub mod open;
 pub mod precision;
+pub mod property;
 pub mod purge;
 pub mod save;
 pub mod select;
@@ -82,6 +83,7 @@ pub fn registry() -> Result<Registry> {
     modify::register(&mut registry)?;
     select::register(&mut registry)?;
     layer::register(&mut registry)?;
+    property::register(&mut registry)?;
     settings::register(&mut registry)?;
     precision::register(&mut registry)?;
     vocabulary::register_names(&mut registry, vocabulary::Area::Drawing)?;

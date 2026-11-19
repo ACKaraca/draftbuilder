@@ -12,8 +12,16 @@ pub const FINGERPRINT_ASSIGNED: Reason = Reason {
     message_id: "db-io-loss-fingerprint-assigned",
 };
 
+/// The drawing had no layer `0`; the reserved layer was created when the drawing was opened.
+pub const LAYER_ZERO_CREATED: Reason = Reason {
+    code: "db.io.layer_zero_created",
+    outcome: Outcome::Mapped,
+    severity: Severity::Info,
+    message_id: "db-io-loss-layer-zero-created",
+};
+
 /// Every reason of this crate.
-pub const ALL: &[Reason] = &[FINGERPRINT_ASSIGNED];
+pub const ALL: &[Reason] = &[FINGERPRINT_ASSIGNED, LAYER_ZERO_CREATED];
 
 #[cfg(test)]
 mod tests {
