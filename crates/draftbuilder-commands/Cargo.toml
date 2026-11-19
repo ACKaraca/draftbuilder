@@ -10,10 +10,12 @@ publish.workspace = true
 
 [dependencies]
 arc-base = { workspace = true }
+arc-geom = { workspace = true }
 arc-command = { workspace = true, features = ["headless"] }
 arc-doc = { workspace = true }
 arc-draft = { workspace = true }
 arc-draft-dxf = { workspace = true }
+arc-io-dwg = { workspace = true }
 arc-io-dxf = { workspace = true }
 draftbuilder-io = { path = "../draftbuilder-io" }
 draftbuilder-model = { path = "../draftbuilder-model" }

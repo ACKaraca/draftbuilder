@@ -25,6 +25,7 @@ arc-app = { git = "https://github.com/ACKaraca/arc-core", rev = "2ffe69cbe8de530
 arc-gpu = { git = "https://github.com/ACKaraca/arc-core", rev = "2ffe69cbe8de530d475e2410719d7ede8cf0e091" }
 arc-ui = { git = "https://github.com/ACKaraca/arc-core", rev = "2ffe69cbe8de530d475e2410719d7ede8cf0e091" }
 arc-io-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "2ffe69cbe8de530d475e2410719d7ede8cf0e091" }
+arc-io-dwg = { git = "https://github.com/ACKaraca/arc-core", rev = "2ffe69cbe8de530d475e2410719d7ede8cf0e091" }
 
 # Image decoding in tests and PNG output only; every other format stays off (as in arc-core).
 image = { version = "0.25.10", default-features = false, features = ["png"] }

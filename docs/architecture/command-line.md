@@ -113,6 +113,13 @@ prompt form. Alias files in the conventional PGP format are imported and exporte
 ([DB-CMD-010](../product/capabilities/02-command-interface.md)); the active alias set is a documented
 text file. Collisions between an alias and a command name are reported when the file loads.
 
+As implemented: `draftbuilder-commands` keeps the product's typed names and short aliases in one table
+(`vocabulary`); `names` reads the prefixes `_`, `-` and `.` and resolves the name through the registry.
+The CLI `run` subcommand accepts every form. The automation protocol passes a command name to
+`arc-command` unchanged, and `arc-command` has no hook for the prefixes, so the protocol accepts
+identifiers, typed names and aliases, not the prefixed forms. Closing that gap needs a name hook in
+`arc-command`.
+
 ## Autocomplete and search
 
 As the user types, the command line proposes matches from command names, aliases, routine-defined

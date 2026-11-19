@@ -260,3 +260,19 @@ fn the_runner_installs_the_drafting_validators_and_reports_failures_by_category(
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("draft.name.taken"));
 }
+
+#[test]
+fn typed_names_and_aliases_run_through_the_protocol() {
+    let dir = TempDir::new("protocol-names");
+    let package = dir.path("work.draftb");
+    let mut session = Session::start(&dir, &package);
+    // The conventional typed name of the new-drawing command runs it; the identifier is what
+    // the result names.
+    let created = session.call(
+        "command.run",
+        json!({"document": "work", "command": "NEW", "params": {}}),
+    );
+    assert_eq!(created["command"], "draftbuilder.drawing.new", "{created}");
+    assert_eq!(created["value"]["unit"], "millimeter", "{created}");
+    session.finish();
+}

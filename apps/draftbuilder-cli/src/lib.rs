@@ -103,6 +103,69 @@ fn renderer() -> SnapshotRenderer {
     SnapshotRenderer::with_drawing(render::drawing)
 }
 
+/// The `run` flags that take a value in the next argument.
+const RUN_VALUE_FLAGS: &[&str] = &[
+    "--read-root",
+    "--write-root",
+    "--params",
+    "--macro",
+    "--record",
+    "--seed",
+];
+
+/// Where the names given to `--command` in a `run` line are: the index of the argument after a
+/// `--command` flag, or the index of an argument `--command=NAME`. A value of another flag is
+/// skipped, so an argument that merely equals `--command` is not a name.
+fn command_positions(args: &[OsString]) -> Vec<usize> {
+    let mut out = Vec::new();
+    if args.first().and_then(|a| a.to_str()) != Some("run") {
+        return out;
+    }
+    let mut i = 1;
+    while i < args.len() {
+        match args.get(i).and_then(|a| a.to_str()) {
+            Some("--command") => {
+                if i + 1 < args.len() {
+                    out.push(i + 1);
+                }
+                i += 2;
+            }
+            Some(flag) if flag.starts_with("--command=") => {
+                out.push(i);
+                i += 1;
+            }
+            Some(flag) if RUN_VALUE_FLAGS.contains(&flag) => i += 2,
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// Replaces the names given to `--command` in a `run` line by the identifiers they resolve to, so
+/// the name forms of [`draftbuilder_commands::names`] run the command. A name that resolves to no
+/// command is left as typed, so the runner reports it as `cmd.unknown`; any other resolution error,
+/// such as `cmd.name.ambiguous`, is returned.
+///
+/// # Errors
+/// The errors of [`draftbuilder_commands::names::resolve`] other than `cmd.unknown`.
+fn resolve_command_names(args: &mut [OsString], product: &Product) -> Result<(), Error> {
+    for at in command_positions(args) {
+        let Some(text) = args.get(at).and_then(|a| a.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let (flag, name) = match text.strip_prefix("--command=") {
+            Some(name) => ("--command=", name.to_owned()),
+            None => ("", text.clone()),
+        };
+        match draftbuilder_commands::names::resolve(&product.registry, &name) {
+            Ok(resolved) => args[at] = OsString::from(format!("{flag}{}", resolved.id)),
+            Err(error) if error.code() == codes::UNKNOWN.code => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 /// Runs the command-line program: `session` and `render` here, every other subcommand through
 /// the shared runner. Never panics: a fault is contained and reported as [`Exit::Internal`].
 pub fn run<R, W, E>(
@@ -118,6 +181,9 @@ where
     E: Write + Send,
 {
     let mut args: Vec<OsString> = args.into_iter().collect();
+    if let Err(error) = resolve_command_names(&mut args, product) {
+        return headless::report_error(error, &mut stderr);
+    }
     if args.first().and_then(|a| a.to_str()) != Some("render") {
         let setup = |document: &arc_doc::Document| {
             draftbuilder_commands::install(document);
@@ -141,4 +207,45 @@ where
         Err(_) => Error::new(codes::FAULT),
     };
     headless::report_error(error, &mut stderr)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::command_positions;
+
+    fn args(items: &[&str]) -> Vec<OsString> {
+        items.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn only_the_value_of_a_command_flag_is_a_name() {
+        let line = args(&["run", "p.draftb", "--command", "NEW", "--params", "{}"]);
+        assert_eq!(command_positions(&line), [3]);
+        let inline = args(&["run", "p.draftb", "--command=-NEW"]);
+        assert_eq!(command_positions(&inline), [2]);
+    }
+
+    #[test]
+    fn an_argument_that_equals_the_flag_is_not_a_name() {
+        // `--command` here is the value of `--read-root`: the name after it is not a command name.
+        let line = args(&["run", "p.draftb", "--read-root", "--command", "NEW"]);
+        assert_eq!(command_positions(&line), Vec::<usize>::new());
+        let params = args(&[
+            "run",
+            "p.draftb",
+            "--params",
+            "--command",
+            "--command",
+            "NEW",
+        ]);
+        assert_eq!(command_positions(&params), [5]);
+    }
+
+    #[test]
+    fn other_subcommands_have_no_command_names() {
+        let line = args(&["serve", "--command", "NEW"]);
+        assert_eq!(command_positions(&line), Vec::<usize>::new());
+    }
 }

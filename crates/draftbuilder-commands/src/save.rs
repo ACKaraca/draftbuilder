@@ -1,8 +1,11 @@
-//! `draftbuilder.drawing.save_dxf`: writes the drawing database as a DXF file.
+//! `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf`: writes the drawing database as
+//! a DXF file.
 //!
 //! The command is undoable because it records, in its transaction, the handles the export
 //! assigned to objects the file did not have. A save that assigns none changes nothing and
-//! leaves no step in the history.
+//! leaves no step in the history. The file is written to a temporary file beside the target,
+//! which replaces the target only when it is complete, so a failed save never leaves a truncated
+//! drawing. DWG writing is not available yet: a DWG target is refused.
 
 use std::io::Write;
 use std::path::Path;
@@ -19,15 +22,23 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Message, SAVE_PROGRESS, codes};
-use crate::open::fresh_fingerprint;
+use crate::open::{Format, fresh_fingerprint};
 
-/// The command identifier.
+/// The identifier of the DXF save.
 pub const ID: &str = "draftbuilder.drawing.save_dxf";
+/// The identifier of the save.
+pub const SAVE_ID: &str = "draftbuilder.drawing.save";
 const LABEL: Message = Message {
     message_id: "db-cmd-save-label",
 };
 const DESCRIPTION: Message = Message {
     message_id: "db-cmd-save-description",
+};
+const SAVE_LABEL: Message = Message {
+    message_id: "db-cmd-save-drawing-label",
+};
+const SAVE_DESCRIPTION: Message = Message {
+    message_id: "db-cmd-save-drawing-description",
 };
 
 /// The highest handle any save of this process has written. Undoing a save removes its recorded
@@ -71,7 +82,130 @@ pub struct SaveResult {
     pub report: serde_json::Value,
 }
 
+/// The unpredictable part of a temporary name: a hash of a fresh random state (the standard
+/// library seeds it from the operating system) mixed with the time, so a name cannot be guessed
+/// from the process and the time alone.
+fn unpredictable() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    hasher.write_u128(nanos);
+    hasher.finish()
+}
+
+/// Refuses a target that exists and is not a regular file: a directory, a link, a device.
+fn check_regular_target(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if !meta.is_file() => Err(Error::new(codes::TARGET_NOT_FILE)),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::new(arc_command::error::codes::PATH_IO).with_source(e)),
+    }
+}
+
+/// Writes `bytes` to `path` through a temporary file beside it, then replaces `path` with it.
+///
+/// The target is checked against the write roots and must be a regular file or absent. The
+/// temporary file is created exclusively through the session's roots, under a short name with a
+/// random part, so a name planted in advance is never opened. It takes the permissions of the file
+/// it replaces, is synced before the rename, and the directory is synced after it on Unix. On
+/// failure the temporary file is removed and `path` keeps what it held.
+///
+/// shortcut: the exclusive create is the roots' reservation followed by a reopen of that placeholder,
+/// so a link swapped in between is followed; the foundation has no exclusive create on the command
+/// context, see the report, upgrade when it has one.
+fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    check_regular_target(path)?;
+    ctx.session().roots.check_write(path)?;
+    if !ctx.session().permissions.contains(&Permission::FileWrite) {
+        return Err(Error::new(arc_command::error::codes::PERMISSION_DENIED)
+            .with_detail("permission", "file_write"));
+    }
+    let name = format!(
+        ".draftbuilder-{:x}-{:016x}-{}.tmp",
+        std::process::id(),
+        unpredictable(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let temp_path = path.with_file_name(name);
+    let temp = ctx.session().roots.reserve(&temp_path)?;
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&temp)
+            .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+        drop(file);
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::fs::set_permissions(&temp, meta.permissions())
+                .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+        }
+        std::fs::rename(&temp, path).map_err(|e| {
+            Error::new(arc_command::error::codes::PATH_IO)
+                .with_detail("reason", "rename")
+                .with_source(e)
+        })?;
+        sync_parent(path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Syncs the directory holding `path`, so the rename survives a power loss (Unix only; Windows
+/// does not sync directories).
+fn sync_parent(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        std::fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| {
+                Error::new(arc_command::error::codes::PATH_IO)
+                    .with_detail("reason", "sync")
+                    .with_source(e)
+            })?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Refuses a DWG target: DWG writing is not available yet. A name ending in `.dwg` counts, even
+/// a file named exactly `.dwg`. Any other name is written as DXF; the application's atomic save
+/// writes through a temporary name, so the extension is not required to be `dxf`.
+fn check_target(path: &str) -> Result<()> {
+    if matches!(Format::of_path(Path::new(path)), Ok(Format::Dwg)) {
+        return Err(Error::new(codes::FORMAT_UNSUPPORTED));
+    }
+    Ok(())
+}
+
+/// `draftbuilder.drawing.save_dxf`: writes the drawing as DXF.
+fn save_dxf(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
+    check_target(&p.path)?;
+    save_drawing(ctx, p)
+}
+
+/// `draftbuilder.drawing.save`: writes the drawing as DXF; a DWG target is refused.
 fn save(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
+    check_target(&p.path)?;
+    save_drawing(ctx, p)
+}
+
+fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
     let snapshot = ctx.snapshot().clone();
     let space = crate::model_space(&snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
     let database = Database::of(&snapshot);
@@ -101,10 +235,7 @@ fn save(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         arc_io_dxf::write(&exported.drawing, &mut options)?
     };
     ctx.checkpoint()?;
-    let mut file = ctx.create_write(Path::new(&p.path))?;
-    file.write_all(&output.bytes)
-        .and_then(|()| file.flush())
-        .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+    write_atomic(ctx, Path::new(&p.path), &output.bytes)?;
     // The file is written: record the handles it now holds for objects that had none.
     let new: Vec<_> = exported
         .handles
@@ -135,15 +266,25 @@ fn save(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
     })
 }
 
-/// Registers `draftbuilder.drawing.save_dxf` (permission classes `read`, `edit` and
-/// `file_write`, undoable).
+/// Registers `draftbuilder.drawing.save_dxf` and `draftbuilder.drawing.save` (permission classes
+/// `read`, `edit` and `file_write`, undoable).
 ///
 /// # Errors
-/// `cmd.duplicate` when the identifier is already registered.
+/// `cmd.duplicate` when an identifier is already registered.
 pub fn register(registry: &mut Registry) -> Result<()> {
     registry.register(
-        CommandSpec::new(ID, LABEL.message_id, DESCRIPTION.message_id, save)
+        CommandSpec::new(ID, LABEL.message_id, DESCRIPTION.message_id, save_dxf)
             .with_undo(UndoBehavior::Undoable)
             .with_permissions([Permission::Read, Permission::Edit, Permission::FileWrite]),
+    )?;
+    registry.register(
+        CommandSpec::new(
+            SAVE_ID,
+            SAVE_LABEL.message_id,
+            SAVE_DESCRIPTION.message_id,
+            save,
+        )
+        .with_undo(UndoBehavior::Undoable)
+        .with_permissions([Permission::Read, Permission::Edit, Permission::FileWrite]),
     )
 }

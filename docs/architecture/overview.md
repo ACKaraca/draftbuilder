@@ -240,6 +240,29 @@ object while the process lives, but a later process that opens the package conti
 lower mark in the document); and one drawing per document: opening a second file into a document
 is refused.
 
+### Commands and formats added after M0
+
+| Part | State |
+|---|---|
+| Vocabulary and name forms | `draftbuilder-commands` holds the typed names and aliases (`OPEN`, `NEW`, `SAVE`, `AUDIT`, `PURGE`, `MOVE` with `M`) in one table, applied to the registry through arc-command's user aliases. The prefixes `_` (English name), `-` (prompt form) and `.` (built-in command) are read by the product, and the CLI `run` subcommand accepts them. The protocol takes identifiers, typed names and aliases; see [command-line.md](command-line.md#aliases-and-command-resolution). Completion ignores surrounding whitespace, as parsing does, and the built-in form offers only the names it resolves. |
+| Open | `draftbuilder.drawing.open` reads a DWG file through `arc-io-dwg` (R13 to R2018, experimental for files that are not trusted) or a DXF file. The content decides the format: a DWG version signature, or the section markers of a DXF; the file name decides only when the content names neither. `draftbuilder.drawing.open_dxf` reads DXF only. The reader's report is merged into the plan's report. |
+| Units | An optional `unit` is the drawing's unit. The content is scaled by the factor the DXF mapper applies, and the report carries the mapper's own item: `draft.dxf.units_converted` with the source code and the factor, or `draft.dxf.units_unitless` when nothing is converted. Model-space geometry and text heights are scaled. Block content keeps the unit of its block record; the drafting model converts a reference when it draws. |
+| New | `draftbuilder.drawing.new` creates an empty drawing from the metric or imperial default, or from a template drawing (DWG or DXF). A template contributes its layers, linetypes, text styles, dimension styles and unit. Its geometry, blocks, objects, layouts and page setups are not copied, and its handles are not kept. A new drawing has no report. |
+| Save | `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf` write DXF for versions 2000 to 2018. The target must be a regular file or absent, and it is checked against the write roots first. The file is written to a temporary file created exclusively beside the target under a name with a random part; the temporary file takes the target's permissions, is synced, and replaces the target by a rename, after which the directory is synced on Unix. A failed save removes the temporary file and leaves the target as it was. A DWG target is refused, because DWG writing is not available. |
+| Audit | `draftbuilder.drawing.audit` reports owner, handle-binding and curve geometry findings. It lists at most the session's record limit and counts the rest. It repairs nothing. |
+| Purge | `draftbuilder.drawing.purge` removes unused layers, linetypes, block definitions and styles. With `repeat` it makes passes until nothing more is unused, up to 64 passes; a preview runs the same passes and rolls them back, so it lists what a run removes. Protected names are kept per category: layers `0` and `Defpoints`, linetypes `Continuous`, `ByLayer` and `ByBlock`, and the text style `Standard`. A name that a preserved record of the file contains is kept too. |
+| Reports | Open and save return the loss report, which the CLI and the protocol return as JSON ([interoperability.md](interoperability.md#report-format)). |
+
+Not implemented yet: a read-only open and an initial view; DWG writing and save as DWG; DXF writing
+for R12 to R14; the DWG fingerprint and handle seed, which `arc-io-dwg` does not carry (a DWG drawing
+gets an assigned fingerprint, and its handle mark is the highest bound handle, not the file's seed);
+the directory sync on Windows; an exclusive create on the command context (the save uses the roots'
+reservation and reopens the placeholder); the independent-reader check in continuous integration; the
+status-bar indicator; a human-readable report beside the JSON; placement of imports by insertion point
+or geographic location; audit repairs; purge of empty text and of application names; layouts and page
+setups of templates; scaling of linetype pattern lengths on unit conversion (the DXF mapping does not
+scale them yet, see arc-core).
+
 ## Testing strategy
 
 - **Round-trip corpus.** DWG and DXF files from the suite corpus repositories, each with owner,

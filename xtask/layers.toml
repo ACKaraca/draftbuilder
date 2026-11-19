@@ -26,6 +26,7 @@ third_party = [
   "arc-draft-dxf",
   "arc-geom",
   "arc-gpu",
+  "arc-io-dwg",
   "arc-io-dxf",
   "arc-ui",
   "image",

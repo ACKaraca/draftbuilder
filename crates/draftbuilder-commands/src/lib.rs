@@ -1,25 +1,43 @@
 //! The commands and document type set of DraftBuilder, headless.
 //!
 //! [`types`] is the document type set: the drafting types of `arc-draft`. [`registry`] is the
-//! command set: the `core.draft.*` commands plus the product's
+//! command set: the `core.draft.*` commands of `arc-draft` plus the product's
 //!
-//! - `draftbuilder.drawing.open_dxf` ([`open`]): reads a DXF file into the document as a
-//!   drawing database (entities with their source handles, the fingerprint);
-//! - `draftbuilder.drawing.save_dxf` ([`save`]): writes the drawing as DXF with those handles and
-//!   records the handles it assigns;
+//! - `draftbuilder.drawing.open` ([`open`]) and `draftbuilder.drawing.open_dxf`: read a DWG or
+//!   DXF file into the document as a drawing database (entities with their source handles, the
+//!   fingerprint, the units and the loss report);
+//! - `draftbuilder.drawing.new` ([`new_drawing`]): an empty drawing from a unit system or a template;
+//! - `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf` ([`save`]): write the drawing
+//!   as DXF through a temporary file, with the handles and fingerprint it was opened with;
+//! - `draftbuilder.drawing.audit` ([`audit`]): reports the checks that fail, repairs nothing;
+//! - `draftbuilder.drawing.purge` ([`purge`]): removes unused objects, with a preview.
 //!
-//! Move is the core command `core.draft.entity.transform` under the alias `move`: it takes
-//! `{"objects": [...], "transform": {"translation": [dx, dy]}}`.
+//! The names of these commands and of the core commands the product uses (`MOVE`, alias `M`) are
+//! the rows of [`vocabulary`]. The per-area modules ([`draw`], [`modify`], [`select`], [`layer`],
+//! [`settings`], [`precision`]) register the commands of their area and apply their rows; their
+//! registration is called from [`registry`], the one registration point. Name prefixes
+//! (`_`, `-` and `.`) are read by [`names`].
 //!
-//! The product layer wires and names: reading and writing the format is `arc-io-dxf` and
-//! `arc-draft-dxf`, the drawing database is `draftbuilder-model`, the mapping between them is
-//! `draftbuilder-io`.
+//! The product layer wires and names: reading and writing the formats is `arc-io-dxf`,
+//! `arc-io-dwg` and `arc-draft-dxf`, the drawing database is `draftbuilder-model`, the mapping
+//! between them is `draftbuilder-io`.
 //!
 //! No function in this crate panics.
 
+pub mod audit;
+pub mod draw;
 pub mod error;
+pub mod layer;
+pub mod modify;
+pub mod names;
+pub mod new_drawing;
 pub mod open;
+pub mod precision;
+pub mod purge;
 pub mod save;
+pub mod select;
+pub mod settings;
+pub mod vocabulary;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -46,16 +64,27 @@ pub fn types() -> Result<TypeRegistry> {
     Ok(registry)
 }
 
-/// The command set: the `core.draft.*` commands and the product's commands.
+/// The command set: the `core.draft.*` commands and the product's commands, and the vocabulary
+/// names of all of them.
 ///
 /// # Errors
-/// `cmd.duplicate` when a command is registered twice; none occurs for this set.
+/// `cmd.duplicate` when a command or name is registered twice, and `cmd.unknown` when a vocabulary
+/// row names a command that is not registered; neither occurs for this set.
 pub fn registry() -> Result<Registry> {
     let mut registry = Registry::new();
     arc_draft::register_commands(&mut registry)?;
     open::register(&mut registry)?;
     save::register(&mut registry)?;
-    registry.add_user_alias("move", "core.draft.entity.transform")?;
+    new_drawing::register(&mut registry)?;
+    audit::register(&mut registry)?;
+    purge::register(&mut registry)?;
+    draw::register(&mut registry)?;
+    modify::register(&mut registry)?;
+    select::register(&mut registry)?;
+    layer::register(&mut registry)?;
+    settings::register(&mut registry)?;
+    precision::register(&mut registry)?;
+    vocabulary::register_names(&mut registry, vocabulary::Area::Drawing)?;
     Ok(registry)
 }
 

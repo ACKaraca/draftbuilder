@@ -23,8 +23,8 @@ Present:
 
 ```
 crates/draftbuilder-model/     fingerprint, stable IDs, handle high-water mark, view of the handle bindings (headless)
-crates/draftbuilder-io/        DXF mapping: header GUIDs, export policy, loss items (headless)
-crates/draftbuilder-commands/  document type set, open and save DXF, the `move` alias (headless)
+crates/draftbuilder-io/        DXF and DWG mapping: header GUIDs, units, export, loss items (headless)
+crates/draftbuilder-commands/  type set, drawing commands, command vocabulary, name forms (headless)
 apps/draftbuilder/             desktop application (wiring only, over the arc-app shell)
 apps/draftbuilder-cli/         headless CLI: the shared subcommands and `render`
 xtask/                         layers, catalogs, ci

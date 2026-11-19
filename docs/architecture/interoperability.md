@@ -103,6 +103,40 @@ object class: preserved unchanged, mapped, approximated (with method), dropped (
 invalidated foreign data. It is shown interactively, returned as structured data by the automation
 protocol and written as JSON by the CLI, so pipelines can fail on unexpected losses.
 
+### Report format
+
+The open and save commands return the report as the `report` member of their result. It is the loss
+report of `arc-io-dxf`, in the form of `schemas/loss-report.schema.json` of `arc-core`: a header with
+the format (`dxf` or `dwg`), the version and the direction; a summary with the counts `mapped`,
+`approximated`, `preserved`, `dropped` and `failed`; the items, each with its reason code, outcome,
+severity, record kind, the handle of the first record, the object identifier when there is one, and
+the arguments (`count`, or for `db.io.import_transform` the units and the factor); and `truncated`
+when items were folded. The CLI prints the result as JSON, so a batch job can gate on the summary.
+
+### Units on import
+
+An import is scaled into the drawing's unit. The file's unit code (`$INSUNITS`) sets the source; the
+factor is the one the DXF mapping applies, and the mapping reports it in `draft.dxf.units_converted`
+with the source code, so a report never disagrees with the geometry. A file whose code the mapping
+does not know, and a unitless file, convert nothing and are reported with `draft.dxf.units_unitless`.
+Block content keeps the unit of its block record, and the drafting model converts a reference to it
+when it draws. Linetype pattern lengths are not scaled by the DXF mapping yet (see arc-core).
+
+### Saving
+
+A save writes to a temporary file created exclusively beside the target, under a name with a random
+part, and renames it over the target only when it is complete and synced. The temporary file takes the
+target's permissions. A target that exists and is not a regular file (a directory or a link) is
+refused before anything is written. On Unix the directory is synced after the rename; on Windows it is
+not. A DWG target is refused.
+
+### Status of the drawing formats
+
+| Format | Read | Write | Validation |
+|---|---|---|---|
+| DWG | R13 to R2018 through `arc-io-dwg`; experimental for files that are not trusted, because parsing is not yet isolated in a worker process | not implemented; a DWG target is refused | Unit tests in `arc-core`; the DraftBuilder tests cover the refusals and the mapping path |
+| DXF | ASCII and binary, R12 to R2018 through `arc-io-dxf` | R2000 to R2018 (the writer refuses earlier targets) | Round-trip tests of this repository; the independent-reader check of [Validation](#validation) is not run in CI yet |
+
 ## Formats without a published specification
 
 A proprietary format with a published specification or a permissively licensed open reader is read
