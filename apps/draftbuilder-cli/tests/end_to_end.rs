@@ -1,12 +1,13 @@
-//! End to end through the built binary: a package is created, a DXF drawing is opened into it,
-//! moved, the move undone and the drawing saved as DXF; the saved file carries the handles of
-//! the source. Then the shared subcommands run on the package.
+//! End to end through the built binary, with the shared runner only: a package is created
+//! (`--create`), a DXF drawing is opened into it, moved, the move undone with `history.undo`
+//! and the drawing saved as DXF over the protocol; the saved file carries the handles of the
+//! source. Then the shared subcommands run on the package.
 
 #![allow(clippy::unwrap_used, clippy::panic, reason = "tests")]
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -36,57 +37,83 @@ impl Drop for TempDir {
     }
 }
 
-/// A running `session` subcommand.
-struct Script {
+/// A protocol session with the binary.
+struct Session {
     child: Child,
-    to: ChildStdin,
     from: BufReader<ChildStdout>,
+    next: u64,
 }
 
-impl Script {
-    fn start(dir: &TempDir, file: &str) -> Self {
+impl Session {
+    fn start(dir: &TempDir, package: &str) -> Self {
         let root = dir.0.to_str().unwrap();
         let mut child = Command::new(BIN)
             .args([
-                "session",
-                file,
+                "serve",
+                "--stdio",
+                "--create",
+                package,
                 "--save",
                 "--allow-edit",
-                "--read-root",
-                root,
-                "--write-root",
-                root,
             ])
+            .args(["--read-root", root, "--write-root", root])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let to = child.stdin.take().unwrap();
         let from = BufReader::new(child.stdout.take().unwrap());
-        Self { child, to, from }
+        let mut session = Self {
+            child,
+            from,
+            next: 0,
+        };
+        let r = session.call(
+            "arc.initialize",
+            json!({"clientName": "e2e", "protocolVersions": {"min": "1.0", "max": "1.0"},
+                   "permissions": ["read", "edit", "file_read", "file_write"]}),
+        );
+        assert!(r.get("permissions").is_some(), "{r}");
+        session
     }
 
-    fn send(&mut self, request: &Value) -> Value {
-        writeln!(self.to, "{request}").unwrap();
-        self.to.flush().unwrap();
-        let mut line = String::new();
-        self.from.read_line(&mut line).unwrap();
-        let answer: Value =
-            serde_json::from_str(&line).unwrap_or_else(|_| panic!("no answer: {line:?}"));
-        answer["ok"].clone()
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        self.next += 1;
+        let request =
+            json!({"jsonrpc": "2.0", "id": self.next, "method": method, "params": params});
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{request}").unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let mut line = String::new();
+            assert!(self.from.read_line(&mut line).unwrap() > 0, "session ended");
+            let message: Value = serde_json::from_str(&line).unwrap();
+            if message["id"] == json!(self.next) {
+                assert!(message.get("error").is_none(), "{message}");
+                return message["result"].clone();
+            }
+        }
     }
 
-    fn finish(self) -> Output {
-        let Self { child, to, from } = self;
-        drop(to);
-        drop(from);
-        child.wait_with_output().unwrap()
+    fn run(&mut self, command: &str, params: Value) -> Value {
+        let r = self.call(
+            "command.run",
+            json!({"document": "work", "command": command, "params": params}),
+        );
+        r["value"].clone()
+    }
+
+    fn finish(mut self) {
+        self.call("arc.shutdown", json!({}));
+        drop(self.child.stdin.take());
+        let status = self.child.wait().unwrap();
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(self.child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
+        assert!(status.success(), "{status}: {stderr}");
     }
 }
 
-/// The handles of the entities of a DXF file, in file order, by the group 5 that follows an
-/// entity type in the ENTITIES section.
+/// The handles of the entities of a DXF file's ENTITIES section, in file order.
 fn entity_handles(text: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let mut in_entities = false;
@@ -110,63 +137,67 @@ fn entity_handles(text: &str) -> Vec<String> {
 }
 
 #[test]
-fn open_move_undo_save_through_the_cli() {
+fn open_move_undo_save_through_the_shared_runner() {
     let dir = TempDir::new("e2e");
     std::fs::write(dir.0.join("m0.dxf"), FIXTURE).unwrap();
     let package = dir.path("work.draftb");
-    let mut script = Script::start(&dir, &package);
+    let mut session = Session::start(&dir, &package);
 
-    let opened = script.send(&json!({"command": "draftbuilder.drawing.open_dxf",
-                                     "params": {"path": dir.path("m0.dxf")}}));
-    assert_eq!(opened["handles"], 6, "{opened}");
-    let entities = script.send(&json!({"list": "entities"}));
-    let list = entities.as_array().unwrap();
-    assert_eq!(list.len(), 6);
-    let handles: Vec<&str> = list.iter().map(|e| e["handle"].as_str().unwrap()).collect();
-    assert_eq!(handles, ["100", "101", "102", "103", "104", "109"]);
-    assert!(
-        list.iter()
-            .all(|e| e["stable_id"].as_str().is_some_and(|s| s.len() == 36))
+    let opened = session.run(
+        "draftbuilder.drawing.open_dxf",
+        json!({"path": dir.path("m0.dxf")}),
     );
+    assert_eq!(opened["handles"], 15, "{opened}");
+    let queried = session.call(
+        "query.objects",
+        json!({"document": "work", "types": ["core.draft.line", "core.draft.arc", "core.draft.polyline"],
+               "fields": ["geometry"]}),
+    );
+    let before = queried["objects"].clone();
+    let ids: Vec<Value> = before
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["id"].clone())
+        .collect();
+    assert!(ids.len() >= 5, "{queried}");
 
-    let ids: Vec<&str> = list.iter().map(|e| e["id"].as_str().unwrap()).collect();
-    script.send(&json!({"command": "draftbuilder.modify.move",
-                        "params": {"objects": ids, "offset": [25.0, -10.0]}}));
-    assert_eq!(script.send(&json!({"undo": true}))["changed"], true);
-    assert_eq!(
-        script.send(&json!({"undo": true}))["changed"],
-        true,
-        "the open is undoable too"
+    session.run(
+        "move",
+        json!({"objects": ids, "transform": {"translation": [25.0, -10.0]}}),
     );
-    assert_eq!(script.send(&json!({"redo": true}))["changed"], true);
-    assert_eq!(
-        script
-            .send(&json!({"list": "entities"}))
-            .as_array()
-            .unwrap()
-            .len(),
-        6
+    let moved = session.call(
+        "query.objects",
+        json!({"document": "work", "types": ["core.draft.line", "core.draft.arc", "core.draft.polyline"],
+               "fields": ["geometry"]}),
     );
-    let saved = script.send(&json!({"command": "draftbuilder.drawing.save_dxf",
-                                    "params": {"path": dir.path("saved.dxf")}}));
-    assert_eq!(saved["handles_carried"], 6, "{saved}");
-    let output = script.finish();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_ne!(moved["objects"], before, "the move changed the geometry");
+    let undone = session.call("history.undo", json!({"document": "work"}));
+    assert_eq!(undone["command"], "core.draft.entity.transform", "{undone}");
+    let restored = session.call(
+        "query.objects",
+        json!({"document": "work", "types": ["core.draft.line", "core.draft.arc", "core.draft.polyline"],
+               "fields": ["geometry"]}),
     );
+    assert_eq!(restored["objects"], before, "undo restores the geometry");
+
+    let saved = session.run(
+        "draftbuilder.drawing.save_dxf",
+        json!({"path": dir.path("saved.dxf")}),
+    );
+    assert_eq!(saved["handles_kept"], 15, "{saved}");
+    session.finish();
 
     let saved = std::fs::read_to_string(dir.0.join("saved.dxf")).unwrap();
     assert_eq!(entity_handles(&saved), entity_handles(FIXTURE));
 
-    // The shared subcommands see the product's commands and the package.
+    // The shared subcommands see the product's commands, and the package they saved is valid.
     let commands = Command::new(BIN).arg("commands").output().unwrap();
     let text = String::from_utf8(commands.stdout).unwrap();
     for id in [
         "draftbuilder.drawing.open_dxf",
         "draftbuilder.drawing.save_dxf",
-        "draftbuilder.modify.move",
+        "core.draft.entity.transform",
     ] {
         assert!(text.contains(id), "{id}");
     }
@@ -182,17 +213,50 @@ fn open_move_undo_save_through_the_cli() {
 }
 
 #[test]
-fn a_failing_request_stops_the_session_with_its_error_code() {
+fn the_runner_installs_the_drafting_validators_and_reports_failures_by_category() {
     let dir = TempDir::new("fail");
-    let mut script = Script::start(&dir, &dir.path("work.draftb"));
-    writeln!(
-        script.to,
+    let root = dir.0.to_str().unwrap();
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            &dir.path("work.draftb"),
+            "--create",
+            "--save",
+            "--allow-edit",
+        ])
+        .args([
+            "--command",
+            "core.draft.layer.create",
+            "--params",
+            r#"{"name": "A"}"#,
+        ])
+        .args(["--read-root", root, "--write-root", root])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
         "{}",
-        json!({"command": "draftbuilder.modify.move",
-                                      "params": {"objects": [], "offset": [1.0, 1.0]}})
-    )
-    .unwrap();
-    let output = script.finish();
-    assert_eq!(output.status.code(), Some(3), "invalid parameters");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cmd.params.invalid"));
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // A second layer of the same name is refused by the drafting names validator, which only
+    // the product's document setup installs; the failure is a conflict (exit 1).
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            &dir.path("work.draftb"),
+            "--save",
+            "--allow-edit",
+            "--seed",
+            "2",
+        ])
+        .args([
+            "--command",
+            "core.draft.layer.create",
+            "--params",
+            r#"{"name": "A"}"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("draft.name.taken"));
 }

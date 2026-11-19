@@ -9,7 +9,7 @@
     reason = "tests"
 )]
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -30,20 +30,37 @@ fn the_opened_drawing_renders_to_a_png() {
 
     let mut session = Command::new(BIN)
         .args([
-            "session",
+            "serve",
+            "--stdio",
+            "--create",
             package.to_str().unwrap(),
             "--save",
             "--allow-edit",
-            "--read-root",
-            root,
         ])
+        .args(["--read-root", root, "--write-root", root])
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let request = json!({"command": "draftbuilder.drawing.open_dxf",
-                         "params": {"path": dir.join("m0.dxf").to_str().unwrap()}});
-    writeln!(session.stdin.take().unwrap(), "{request}").unwrap();
+    let mut stdin = session.stdin.take().unwrap();
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "arc.initialize",
+        "params": {"clientName": "t", "protocolVersions": {"min": "1.0", "max": "1.0"},
+                   "permissions": ["read", "edit", "file_read"]}});
+    let open = json!({"jsonrpc": "2.0", "id": 2, "method": "command.run",
+        "params": {"document": "work", "command": "draftbuilder.drawing.open_dxf",
+                   "params": {"path": dir.join("m0.dxf").to_str().unwrap()}}});
+    writeln!(stdin, "{init}\n{open}").unwrap();
+    // Wait for the open to finish before the session ends and saves.
+    let mut from = BufReader::new(session.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert!(from.read_line(&mut line).unwrap() > 0, "session ended");
+        if line.contains("\"id\":2") {
+            assert!(line.contains("\"result\""), "{line}");
+            break;
+        }
+    }
+    drop(stdin);
     assert!(session.wait().unwrap().success());
 
     let png = dir.join("drawing.png");

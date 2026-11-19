@@ -1,24 +1,22 @@
 //! The DraftBuilder desktop application (wiring only): the DraftBuilder type set and commands
 //! in the windowed shell of `arc-app`, with the viewport drawing the model space through the
-//! drafting extractor of `arc-gpu`. The binary builds this product and starts the event loop;
-//! tests drive the same product headless.
+//! drafting extractor of `arc-gpu`. DXF is a native format of the application: a `.dxf` file
+//! opens and saves through the application's own open and save path. The binary builds this
+//! product and starts the event loop; tests drive the same product headless.
 
-use std::path::Path;
 use std::sync::Arc;
 
-use arc_app::application::{Application, TabId};
-use arc_app::product::{Entry, Extractor, FileType, Product, ProductBuilder};
+use arc_app::product::{Entry, Extractor, FileType, NativeFormat, Product, ProductBuilder};
 use arc_app::shell::{
     self, CommandLinePanel, OutlinerPanel, PropertiesPanel, ShellConfig, ViewportPanel,
 };
 use arc_base::{Error, Result};
-use arc_command::{Clock, Invocation, Permission, Roots, Session, Surface};
+use arc_command::Clock;
 use arc_doc::package::LockOwner;
 use arc_draft::types::ENTITIES;
 use arc_gpu::draft::{DraftOptions, extract_entity};
 use arc_gpu::extract;
 use arc_ui::{Axis, Binding, Dock, DockLayout};
-use serde_json::json;
 
 /// The viewport panel.
 pub const VIEWPORT: &str = "draftbuilder.viewport";
@@ -50,7 +48,7 @@ fn entry(id: &str, label: Message, make: fn() -> Box<dyn shell::Panel>) -> Entry
 }
 
 /// The product of the application: the type set and commands of `draftbuilder-commands`, the
-/// shell commands and settings, the `draftb` file type, four panels and the drafting extractor.
+/// shell commands and settings, the `draftb` package and the native `dxf` file type, four panels and the drafting extractor.
 ///
 /// # Errors
 /// The registries' errors; none occur for this set.
@@ -60,12 +58,26 @@ pub fn product(clock: Arc<dyn Clock>, owner: LockOwner) -> Result<Product> {
         .with_commands(draftbuilder_commands::registry()?);
     arc_app::commands::register(builder.commands_mut())?;
     shell::prefs::register_settings(&mut builder)?;
+    builder.package_extension("draftb");
     builder.file_type(FileType {
         extension: "draftb".into(),
         message_id: "draftbuilder-file-draftb".into(),
         open: true,
         save: true,
     })?;
+    builder.file_type(FileType {
+        extension: "dxf".into(),
+        message_id: "draftbuilder-file-dxf".into(),
+        open: true,
+        save: true,
+    })?;
+    builder.opener(
+        "dxf",
+        NativeFormat::new(
+            draftbuilder_commands::open_document,
+            draftbuilder_commands::save_document,
+        ),
+    )?;
     let panels = [
         entry(
             VIEWPORT,
@@ -165,22 +177,21 @@ pub fn config(seed: u64) -> Result<ShellConfig> {
     })
 }
 
-/// The message catalogs the application formats with, for the requested languages: its own
-/// English messages (the foundation's catalogs are not reachable from a dependency yet, so the
-/// shell's own messages show as identifiers).
+/// The message catalogs the application formats with, for the requested languages: the shell's
+/// ([`arc_app::locale::shell_catalogs`]) with the application's and the crates' English
+/// messages appended.
 ///
 /// # Errors
 /// `app.locale.catalog_invalid` when a catalog does not parse.
 pub fn localizer(requested: &[String]) -> Result<arc_app::locale::Localizer> {
-    let mut catalogs = arc_app::locale::Catalogs::new();
+    let mut catalogs = arc_app::locale::shell_catalogs()?;
     let english = [
         include_str!("../../../locales/en-US/draftbuilder.ftl"),
         include_str!("../../../locales/en-US/draftbuilder-commands.ftl"),
         include_str!("../../../locales/en-US/draftbuilder-io.ftl"),
-        include_str!("../../../locales/en-US/draftbuilder-model.ftl"),
     ]
     .concat();
-    catalogs.add("en-US", &english)?;
+    catalogs.append("en-US", &english)?;
     arc_app::locale::Localizer::new(catalogs, requested)
 }
 
@@ -197,28 +208,4 @@ pub fn describe(error: &Error, localizer: Option<&arc_app::locale::Localizer>) -
         Some(l) => format!("{}: {}", error.code(), l.format_error(error).text),
         None => error.code().to_owned(),
     }
-}
-
-/// Opens the DXF drawing at `path` in a new tab: a new document, then
-/// `draftbuilder.drawing.open_dxf` with read access to the file's directory.
-///
-/// # Errors
-/// The errors of the new document and of the command; a path without a directory is
-/// `cmd.roots.invalid`.
-pub fn open_dxf(app: &mut Application, path: &Path) -> Result<TabId> {
-    let absolute = std::fs::canonicalize(path)
-        .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
-    let dir = absolute.parent().unwrap_or(&absolute).to_path_buf();
-    let tab = app.new_document()?;
-    let mut session = Session::new(
-        Surface::Automation,
-        [Permission::Edit, Permission::FileRead],
-    );
-    session.roots = Roots::new([&dir], std::iter::empty::<&std::path::PathBuf>())?;
-    let invocation = Invocation::new(
-        draftbuilder_commands::open::ID,
-        json!({"path": absolute.to_string_lossy()}),
-    );
-    app.invoke(tab, &session, invocation)?;
-    Ok(tab)
 }

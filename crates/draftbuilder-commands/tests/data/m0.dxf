@@ -37,7 +37,7 @@ LTYPE
 100
 AcDbSymbolTable
  70
-1
+2
   0
 LTYPE
   5
@@ -58,6 +58,34 @@ Solid line
 0
  40
 0.0
+  0
+LTYPE
+  5
+15
+100
+AcDbSymbolTableRecord
+100
+AcDbLinetypeTableRecord
+  2
+DASHED
+ 70
+0
+  3
+Dashed
+ 72
+65
+ 73
+2
+ 40
+0.75
+ 49
+0.5
+ 74
+0
+ 49
+-0.25
+ 74
+0
   0
 ENDTAB
   0
@@ -158,6 +186,114 @@ txt
 
   0
 ENDTAB
+  0
+TABLE
+  2
+BLOCK_RECORD
+  5
+4
+100
+AcDbSymbolTable
+ 70
+1
+  0
+BLOCK_RECORD
+  5
+30
+100
+AcDbSymbolTableRecord
+100
+AcDbBlockTableRecord
+  2
+DOOR
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+BLOCKS
+  0
+BLOCK
+  5
+31
+100
+AcDbEntity
+  8
+0
+100
+AcDbBlockBegin
+  2
+DOOR
+ 70
+0
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+  3
+DOOR
+  1
+
+  0
+LINE
+  5
+32
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbLine
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+ 11
+9.0
+ 21
+0.0
+ 31
+0.0
+  0
+ARC
+  5
+33
+100
+AcDbEntity
+  8
+WALLS
+100
+AcDbCircle
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+ 40
+9.0
+100
+AcDbArc
+ 50
+0.0
+ 51
+90.0
+  0
+ENDBLK
+  5
+34
+100
+AcDbEntity
+  8
+0
+100
+AcDbBlockEnd
   0
 ENDSEC
   0
@@ -378,6 +514,24 @@ DraftBuilder
 STANDARD
 100
 AcDbText
+  0
+INSERT
+  5
+10A
+100
+AcDbEntity
+  8
+NOTES
+100
+AcDbBlockReference
+  2
+DOOR
+ 10
+60
+ 20
+10
+ 30
+0.0
   0
 ENDSEC
   0

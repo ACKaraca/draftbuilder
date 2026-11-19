@@ -32,7 +32,8 @@ fn the_product_opens_a_dxf_drawing_and_draws_every_entity() {
 
     let product = draftbuilder::product(Arc::new(FixedClock(0)), owner()).unwrap();
     assert_eq!(product.panels().len(), 4);
-    assert_eq!(product.file_types()[0].extension, "draftb");
+    assert_eq!(product.file_types().len(), 2);
+    assert!(product.opener(&dir.join("x.dxf")).is_some());
     let factory = &product.extractors()[0].factory;
     let extractor = *factory.create().downcast::<Extractor>().unwrap();
 
@@ -47,7 +48,7 @@ fn the_product_opens_a_dxf_drawing_and_draws_every_entity() {
         recent: RecentFiles::new(4),
     };
     let mut app = Application::new(product, config);
-    let tab = draftbuilder::open_dxf(&mut app, &dir.join("m0.dxf")).unwrap();
+    let tab = app.open(&dir.join("m0.dxf")).unwrap();
     let snapshot = app.tab(tab).unwrap().document().snapshot();
     let mut drawn = 0;
     for (_, object) in snapshot.iter() {
@@ -58,14 +59,30 @@ fn the_product_opens_a_dxf_drawing_and_draws_every_entity() {
                 .as_str(),
         ) {
             let extraction = extractor(&snapshot, object, &Cancel::new()).unwrap();
-            assert!(!extraction.items.is_empty());
-            drawn += 1;
+            // Entities of a block definition draw through their references.
+            drawn += usize::from(!extraction.items.is_empty());
         }
     }
-    assert_eq!(drawn, 6);
+    assert_eq!(
+        drawn, 7,
+        "the model space entities draw, the block's two do not"
+    );
+
+    // The save goes through the application's own path and keeps the handles of the source.
+    app.save(tab).unwrap();
+    let text = std::fs::read_to_string(dir.join("m0.dxf")).unwrap();
+    for handle in ["100", "101", "102", "103", "104", "109", "10A", "12", "30"] {
+        assert!(text.lines().any(|l| l.trim() == handle), "{handle}");
+    }
+    assert!(!app.tab(tab).unwrap().is_dirty());
 
     let localizer = draftbuilder::localizer(&[]).unwrap();
     assert_eq!(draftbuilder::title(&localizer), "DraftBuilder");
+    // Shell messages are no longer raw identifiers.
+    assert_ne!(
+        localizer.format("app-command-undo", &[]).text,
+        "app-command-undo"
+    );
     draftbuilder::config(1).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

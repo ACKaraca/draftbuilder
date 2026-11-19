@@ -22,11 +22,11 @@ specification. Read in this order: [docs/README.md](docs/README.md),
 Present:
 
 ```
-crates/draftbuilder-model/     handles, fingerprint, stable IDs, handle table over arc-doc (headless)
-crates/draftbuilder-io/        DXF mapping: source handles, GUIDs, loss items (headless)
-crates/draftbuilder-commands/  document type set, open and save DXF, move (headless)
+crates/draftbuilder-model/     fingerprint, stable IDs, handle high-water mark, view of the handle bindings (headless)
+crates/draftbuilder-io/        DXF mapping: header GUIDs, export policy, loss items (headless)
+crates/draftbuilder-commands/  document type set, open and save DXF, the `move` alias (headless)
 apps/draftbuilder/             desktop application (wiring only, over the arc-app shell)
-apps/draftbuilder-cli/         headless CLI: shared subcommands, `session`, `render`
+apps/draftbuilder-cli/         headless CLI: the shared subcommands and `render`
 xtask/                         layers, catalogs, ci
 locales/en-US/                 message catalogs, one per crate that has messages
 ```
@@ -57,12 +57,13 @@ The toolchain is pinned in `rust-toolchain.toml`; the gate also needs `cargo-nex
 - `cargo xtask ci` runs all gates, including `cargo deny check` and `cargo audit`. CI runs it when
   started by hand, once per batch of changes: on Windows by default, on Linux, Windows and macOS on
   request.
-- `cargo run -p draftbuilder-cli -- session <file.draftb> --save --allow-edit --read-root <dir>
-  --write-root <dir>` runs a script of JSON lines from standard input: `open_dxf`, `move`, `undo`,
-  `save_dxf` (see [architecture overview](docs/architecture/overview.md#implemented-in-m0)).
+- `cargo run -p draftbuilder-cli -- serve --stdio --create <file.draftb> --save --allow-edit
+  --read-root <dir> --write-root <dir>` serves the automation protocol on a new package: send
+  `command.run` with `draftbuilder.drawing.open_dxf`, `move` and `draftbuilder.drawing.save_dxf`,
+  and `history.undo` ([overview](docs/architecture/overview.md#implemented-in-m0)).
 - `cargo run -p draftbuilder-cli -- render <file.draftb> --output <png> --write-root <dir>` draws the
-  model space headless. The rendering test needs a graphics adapter (on Linux the software Vulkan
-  driver `mesa-vulkan-drivers`) and skips without one.
+  model space headless. Its test needs a graphics adapter (on Linux `mesa-vulkan-drivers`) and
+  skips without one.
 
 ## Suite rules
 

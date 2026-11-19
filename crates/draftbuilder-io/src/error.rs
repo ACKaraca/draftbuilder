@@ -4,16 +4,6 @@
 
 use arc_io_dxf::loss::{Outcome, Reason, Severity};
 
-/// Entities were written with handles that DraftBuilder assigned instead of their source
-/// handles: they were created in this session, or their source handle is reserved by the
-/// export's own structure, or the entities could not be matched to the objects.
-pub const HANDLE_ASSIGNED: Reason = Reason {
-    code: "db.io.handle_assigned",
-    outcome: Outcome::Approximated,
-    severity: Severity::Warning,
-    message_id: "db-io-loss-handle-assigned",
-};
-
 /// The drawing had no fingerprint; one was assigned and written, and later saves keep it.
 pub const FINGERPRINT_ASSIGNED: Reason = Reason {
     code: "db.io.fingerprint_assigned",
@@ -22,17 +12,8 @@ pub const FINGERPRINT_ASSIGNED: Reason = Reason {
     message_id: "db-io-loss-fingerprint-assigned",
 };
 
-/// Two entities of the file had the same handle; the first keeps it and the later one is
-/// written with an assigned handle.
-pub const HANDLE_DUPLICATE: Reason = Reason {
-    code: "db.io.handle_duplicate",
-    outcome: Outcome::Approximated,
-    severity: Severity::Warning,
-    message_id: "db-io-loss-handle-duplicate",
-};
-
 /// Every reason of this crate.
-pub const ALL: &[Reason] = &[HANDLE_ASSIGNED, FINGERPRINT_ASSIGNED, HANDLE_DUPLICATE];
+pub const ALL: &[Reason] = &[FINGERPRINT_ASSIGNED];
 
 #[cfg(test)]
 mod tests {

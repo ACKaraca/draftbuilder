@@ -1,5 +1,7 @@
 //! `draftbuilder.drawing.open_dxf`: reads a DXF file into the document as a drawing database.
 
+use std::path::Path;
+
 use arc_base::id::Identifier;
 use arc_base::{Error, ObjectId, Result};
 use arc_command::{CommandSpec, Context, IdParam, Permission, Registry, UndoBehavior};
@@ -9,16 +11,11 @@ use arc_draft_dxf::apply::{Applied, apply};
 use arc_draft_dxf::fields::Builder;
 use arc_draft_dxf::plan::{ImportOptions, plan_with_report};
 use arc_io_dxf::{Progress, ReadOptions};
-use draftbuilder_io::error::HANDLE_DUPLICATE;
-use draftbuilder_io::open::{fingerprint_of, handle_top, space_handles, unit_of};
-use draftbuilder_io::report::note;
-use draftbuilder_io::save::space_entities;
-use draftbuilder_model::database::{self, Database, Origin};
+use draftbuilder_io::open::{fingerprint_of, seed_top, unit_of};
+use draftbuilder_model::database::{self, Database, Origin, SOURCE_DOCUMENT};
 use draftbuilder_model::{Fingerprint, Handle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::path::Path;
 
 use crate::error::{Message, OPEN_PROGRESS, codes};
 
@@ -49,7 +46,8 @@ pub struct OpenResult {
     pub layers: u64,
     /// Entities created, in the space and in blocks.
     pub entities: u64,
-    /// Model space entities bound to their source handle.
+    /// Objects (layers, linetypes, styles, block definitions and entities) bound to their
+    /// source handle.
     pub handles: u64,
     /// The fingerprint in the form files use.
     pub fingerprint: String,
@@ -70,7 +68,7 @@ fn is_empty(ctx: &Context<'_>) -> bool {
             .is_ok_and(|mut s| s.next().is_none())
 }
 
-/// Reads the file, creates the model space and the objects of the drawing and binds the
+/// Reads the file, creates the model space and the objects of the drawing; the import binds the
 /// handles.
 fn open(ctx: &mut Context<'_>, p: OpenParams) -> Result<OpenResult> {
     if !is_empty(ctx) {
@@ -92,11 +90,12 @@ fn open(ctx: &mut Context<'_>, p: OpenParams) -> Result<OpenResult> {
     ctx.checkpoint()?;
     ctx.progress(0.5, OPEN_PROGRESS.message_id);
     let unit = unit_of(&output.drawing);
-    let mut plan = plan_with_report(
+    let plan = plan_with_report(
         &output.drawing,
         &ImportOptions {
             target_unit: unit,
             limits: *ctx.limits(),
+            source_document: SOURCE_DOCUMENT.to_owned(),
             ..ImportOptions::default()
         },
         &output.report,
@@ -111,37 +110,21 @@ fn open(ctx: &mut Context<'_>, p: OpenParams) -> Result<OpenResult> {
     ctx.txn()?
         .create(SPACE, space, Header::default(), values.values)?;
     let Applied {
-        layers, entities, ..
+        layers,
+        entities,
+        created,
+        ..
     } = apply(ctx, space, &plan)?;
 
-    // The import creates the entities of the space in plan order with ascending draw-order
-    // keys, so the n-th entity in draw order is the n-th the plan lists.
-    let created = space_entities(ctx.txn()?.snapshot(), space);
-    let sources = space_handles(&plan);
-    if created.len() != sources.len() {
-        return Err(Error::new(codes::HANDLES_UNALIGNED));
-    }
-    let mut taken = BTreeSet::new();
-    let mut pairs = Vec::new();
-    let mut duplicates = 0_u64;
-    for (object, source) in created.into_iter().zip(sources) {
-        match source {
-            Some(h) if taken.insert(h) => pairs.push((object, h)),
-            Some(_) => duplicates += 1,
-            None => {}
-        }
-    }
-    note(&mut plan.report, HANDLE_DUPLICATE, "entity", duplicates);
-    let handles = pairs.len() as u64;
-    let txn = ctx.txn()?;
-    database::bind(txn, &pairs)?;
-    database::raise_top(txn, handle_top(&output.drawing, &plan))?;
+    let bound = created.iter().filter_map(|c| c.source).map(|h| h.0);
+    let top = bound.clone().fold(seed_top(&output.drawing), u64::max);
+    let handles = bound.count() as u64;
+    database::raise_top(ctx.txn()?, top)?;
     let (fingerprint, origin) = match fingerprint_of(&output.drawing) {
         Some(f) => (f, Origin::File),
         None => (fresh_fingerprint(ctx)?, Origin::Assigned),
     };
     database::set_fingerprint(ctx.txn()?, fingerprint, origin)?;
-    let top = Database::of(ctx.txn()?.snapshot()).top();
     Ok(OpenResult {
         space: IdParam(space),
         layers,

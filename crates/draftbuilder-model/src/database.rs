@@ -2,34 +2,30 @@
 //! `arc-draft` objects, stored in the `arc-doc` document so that it is journaled, undone with
 //! the commands that change it and saved with the package.
 //!
-//! The state is three kinds of foreign data rows of the format `dxf` (the drawing database is
-//! the DXF database; see `docs/architecture/domain-model.md`):
+//! The handles themselves are the **source map** of `arc-doc` that `arc-draft-dxf` writes on
+//! import and reads on export: one record per bound object, format `dxf`, document
+//! [`SOURCE_DOCUMENT`], identifier the handle in hexadecimal. [`Database`] is a view over it. What
+//! DraftBuilder adds, as foreign data rows of the same format, is what the source map lacks:
 //!
-//! - the **handle table**: one `arc-doc` source-map record per bound object, whose source
-//!   identifier is the object's handle in hexadecimal;
 //! - the **handle high-water mark**: the highest handle the drawing has ever had, from the file
-//!   or from a binding; the next handle is one above it. Rows of deleted objects stay, so a
-//!   deleted object's handle is not issued again;
+//!   or from a recorded binding. It is the `floor` of the export. Rows of deleted objects stay,
+//!   so a deleted object's handle is not issued again;
 //! - the **fingerprint** and where it came from.
-//!
-//! The source identifier of these rows is also what the DXF export reads to start its own
-//! handles above every handle of the drawing, which keeps structural handles clear of bound
-//! ones.
 
 use std::collections::BTreeMap;
 
 use arc_base::id::Identifier;
-use arc_base::{Error, ObjectId, Result};
+use arc_base::{ObjectId, Result};
 use arc_doc::{Snapshot, SourceMap, StoredForeign, Txn};
 
-use crate::error::codes;
 use crate::handle::Handle;
 use crate::identity::{Fingerprint, StableId, stable_id};
 
 /// The `source_format` of every row of the drawing database.
 pub const FORMAT: &str = "dxf";
-/// The document name of the handle table inside the source map.
-const TABLE: &str = "handles";
+/// The label of the source document of the drawing's bindings: the `source_document` of the
+/// import and the `document` of the export. A drawing has one.
+pub const SOURCE_DOCUMENT: &str = "drawing";
 /// The `record_kind` of the high-water mark row.
 const TOP_KIND: &str = "handle_top";
 /// The `record_kind` of the fingerprint row.
@@ -80,7 +76,9 @@ impl Database {
                 db.top = db.top.max(h.value());
             }
             match (row.record_kind.as_str(), handle) {
-                (arc_doc::source_map::RECORD_KIND, Some(h)) if row.data == TABLE.as_bytes() => {
+                (arc_doc::source_map::RECORD_KIND, Some(h))
+                    if row.data == SOURCE_DOCUMENT.as_bytes() =>
+                {
                     let object = row
                         .object
                         .as_deref()
@@ -225,24 +223,19 @@ pub fn raise_top(txn: &mut Txn, top: u64) -> Result<()> {
     )
 }
 
-/// Binds each object to its handle in `txn` and raises the high-water mark to the highest of
-/// them. Nothing is bound twice: a handle or an object that is already bound is an error.
+/// Records `pairs` (object, handle) as bindings in `txn` and raises the high-water mark to the
+/// highest handle. An object that has a binding already keeps it. Used for the handles an
+/// export assigned to objects the file did not have.
 ///
 /// # Errors
-/// `db.model.handle_taken` when a handle is bound to another live object, or an object already
-/// has a handle; the transaction's errors.
-pub fn bind(txn: &mut Txn, pairs: &[(ObjectId, Handle)]) -> Result<()> {
+/// The transaction's errors.
+pub fn record(txn: &mut Txn, pairs: &[(ObjectId, Handle)]) -> Result<()> {
     let db = Database::of(txn.snapshot());
     let mut map = SourceMap::of(txn.snapshot());
-    let mut seen = BTreeMap::new();
     for (object, handle) in pairs {
-        if db.object_of(*handle).is_some_and(|o| o != *object)
-            || db.handle_of(*object).is_some_and(|h| h != *handle)
-            || seen.insert(*handle, *object).is_some_and(|o| o != *object)
-        {
-            return Err(Error::new(codes::HANDLE_TAKEN).with_arg("handle", handle.to_hex()));
+        if db.handle_of(*object).is_none() && db.object_of(*handle).is_none() {
+            map.bind(txn, FORMAT, SOURCE_DOCUMENT, &handle.to_hex(), *object)?;
         }
-        map.bind(txn, FORMAT, TABLE, &handle.to_hex(), *object)?;
     }
     match pairs.iter().map(|(_, h)| h.value()).max() {
         Some(top) => raise_top(txn, top),

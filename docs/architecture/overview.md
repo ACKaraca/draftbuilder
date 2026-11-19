@@ -205,21 +205,40 @@ mapping onto `arc-doc` and `arc-draft`. Everything not listed here is still desi
 | Part | State |
 |---|---|
 | Crates | `draftbuilder-model`, `-io`, `-commands`, `apps/draftbuilder` (over the `arc-app` shell, without a `draftbuilder-ui` crate: the viewport, outliner, property grid and command line panels of `arc-app` are enough), `apps/draftbuilder-cli`, `xtask`. The foundation is one pinned revision of `arc-core`. |
-| Document type set | The drafting types of `arc-draft`. The drawing database adds no object types yet. |
-| Handles and fingerprint | `draftbuilder-model` keeps them as `arc-doc` foreign data rows of the format `dxf`: a handle table (source-map records that bind an object to its handle), the highest handle the drawing has had, and the fingerprint with its origin (file or assigned). Rows are journaled, undone with the commands that wrote them and saved in the package. Rows of deleted objects stay, so a handle is not issued again. |
+| Document type set | The drafting types of `arc-draft`. The drawing database adds no object types. |
+| Handles | The bindings are the source map of `arc-doc` that `arc-draft-dxf` writes on import (format `dxf`, document label `drawing`) and reads on export. `draftbuilder-model` is a view over it. |
+| High-water mark, fingerprint | `draftbuilder-model` keeps these two as `arc-doc` foreign data rows: the highest handle the drawing has had (the `floor` of the export) and the fingerprint with its origin (file or assigned). Rows are journaled, undone with the commands that wrote them and saved in the package. Rows of deleted objects stay, so a handle is not issued again. |
 | Stable IDs | `stable_id` computes the version 5 UUID over the fingerprint and the handle (ADR-0002). Nothing is stored for it, and the journal still addresses objects by their `arc-doc` identifier. |
-| Open | `draftbuilder.drawing.open_dxf` reads the file with `arc-io-dxf`, plans the import with `arc-draft-dxf` and applies it in one undoable transaction. Each model space entity is bound to its source handle by creation order. Entities of blocks do not carry handles yet. |
-| Save | `draftbuilder.drawing.save_dxf` exports the model space with `arc-draft-dxf`, writes each bound entity with its source handle, keeps the fingerprint (or assigns one and says so in the report), writes a new version GUID on every save and a new fingerprint for an independent copy. Entities without a bound handle (created in the session) are written with handles above the drawing's highest handle and reported. Tables, layers, block records and objects of the OBJECTS section are written with handles the export assigns. |
-| Reports | The loss and preservation report of `arc-io-dxf` and `arc-draft-dxf` is returned by both commands with the product items `db.io.handle_assigned`, `db.io.handle_duplicate` and `db.io.fingerprint_assigned`. |
-| Move | `draftbuilder.modify.move` moves points, texts, block references and every entity with curve geometry by an offset; other types are refused with an explanation. |
-| CLI | The shared subcommands of the Arc suite, `session` (one JSON request per line on standard input: a command, `undo`, `redo` or `{"list": "entities"}`) and `render` (the model space to PNG). |
-| Working file | The CLI works on a document package with the extension `draftb`, which holds the drawing database of an opened DXF drawing so that several processes can work on it. The sidecar of [ADR-0001](../adr/0001-drawing-database-is-the-model.md), which accompanies the native `.dxf` file, is not built yet. |
+| Open | `draftbuilder.drawing.open_dxf` reads the file with `arc-io-dxf`, plans the import with `arc-draft-dxf` (source document label `drawing`) and applies it in one undoable transaction; the import binds every object it creates from a file object to its handle. |
+| Save | `draftbuilder.drawing.save_dxf` exports the model space with `HandlePolicy::KeepSources` and the high-water mark as floor, keeps the fingerprint (or assigns one and says so in the report), writes a new version GUID on every save and a new fingerprint for an independent copy. Objects the file did not have get handles above the floor; the command records them as bindings in its transaction and raises the mark. |
+| Reports | The loss and preservation report of `arc-io-dxf` and `arc-draft-dxf` (which names repeated and reassigned handles) is returned by both commands, with the product item `db.io.fingerprint_assigned`. |
+| Move | The alias `move` of `core.draft.entity.transform`. The command-line prompts for it are not built. |
+| CLI | The shared subcommands of the Arc suite with the product's drafting validators installed on every document and `view.render` answered by the drafting renderer, and `render` (the model space to PNG through `arc_app::render`). A script opens, moves, undoes (`history.undo`) and saves over `serve --stdio --create`. |
+| Application | The viewport draws the model space through the drafting extractor of `arc-gpu`. DXF is a native format of the application: a `.dxf` opens and saves through its own open and save path with `open_document` and `save_document`. Shell messages come from the shared catalogs of `arc-app`. |
+| Working file | The CLI works on a document package with the extension `draftb`, which holds the drawing database of an opened DXF drawing so that several processes can work on it. The sidecar of [ADR-0001](../adr/0001-drawing-database-is-the-model.md), which accompanies the native `.dxf` file, is not built yet; a `.dxf` opened in the application has no package, no edit lock and no recovery journal. |
 
-Known limits of the prototype: undo history does not survive a restart, so `undo` runs inside one
-`session`; the documents a shared subcommand opens carry no drafting validators; new objects get
-their handles when the drawing is saved, not when they are created; and the handle high-water mark
-stored in the document is a transaction like any other, so a later process that opens a package
-after an undo can continue from a lower mark than an earlier process reached.
+Handles that a saved file keeps are those of the layers, linetypes, text styles, block records
+(the `BLOCK_RECORD` entries) and the entities of the model space and of blocks that were in the
+opened file. Handles it does not keep:
+
+- the `BLOCK` and `ENDBLK` records of blocks, the `TABLE` headers and the `VERTEX` and `SEQEND`
+  records of classic polylines, which are not objects of the drafting model (a classic polyline is
+  written as a lightweight polyline with the handle of its `POLYLINE` record);
+- the viewport, application-name and dimension-style tables, the paper space and model space block
+  records, the layouts and the dictionaries, which the export writes itself (the root dictionary
+  keeps 0xC unless an object holds it);
+- the standard linetypes (`Continuous`, `ByLayer`, `ByBlock`), which the export writes itself when
+  the document has no linetype of that name;
+- the attribute definitions and attribute values of blocks, paper space entities and objects of
+  types `arc-draft` has no object for, except records kept as foreign data, which keep theirs;
+- objects of a file that repeats a handle, after the first occurrence.
+
+Known limits of the prototype: undo history does not survive a restart, so `history.undo` works
+inside one `serve` session; a save that records handles is a step in the history, and undoing it
+forgets the records (the process-wide mark keeps the written handles from being issued to another
+object while the process lives, but a later process that opens the package continues from the
+lower mark in the document); and one drawing per document: opening a second file into a document
+is refused.
 
 ## Testing strategy
 

@@ -1,8 +1,7 @@
 //! Reading a DXF file into the drawing database: what the neutral model says about the
-//! drawing's identity, and the source handles of the entities the import plan creates.
+//! drawing's identity and unit.
 
 use arc_draft::types::SpaceUnit;
-use arc_draft_dxf::plan::{Container, Op, Plan};
 use arc_draft_dxf::units::unit_of_code;
 use arc_io_dxf::Drawing;
 use draftbuilder_model::{Fingerprint, Handle};
@@ -43,35 +42,11 @@ pub fn unit_of(drawing: &Drawing) -> SpaceUnit {
         .unwrap_or(SpaceUnit::Unitless)
 }
 
-/// The highest handle the file has ever used, as far as the neutral model shows it: the next
-/// free handle the header declares, less one, and every entity handle of the plan.
+/// The highest handle the file's header says it has used: the next free handle it declares,
+/// less one; 0 when it declares none.
 #[must_use]
-pub fn handle_top(drawing: &Drawing, plan: &Plan) -> u64 {
-    let seed = text_of(drawing, SEED_VARIABLE)
+pub fn seed_top(drawing: &Drawing) -> u64 {
+    text_of(drawing, SEED_VARIABLE)
         .and_then(|t| Handle::from_hex(t.trim()))
-        .map_or(0, |h| h.value().saturating_sub(1));
-    plan.ops
-        .iter()
-        .filter_map(|op| match op {
-            Op::Entity { spec, .. } => spec.source.map(|h| h.0),
-            _ => None,
-        })
-        .fold(seed, u64::max)
-}
-
-/// The source handle of each model space entity the plan creates, in creation order; `None`
-/// for an entity the file gave no handle. Entities of blocks are not listed: their handles are
-/// not carried yet.
-#[must_use]
-pub fn space_handles(plan: &Plan) -> Vec<Option<Handle>> {
-    plan.ops
-        .iter()
-        .filter_map(|op| match op {
-            Op::Entity {
-                container: Container::Space,
-                spec,
-            } => Some(spec.source.and_then(|h| Handle::new(h.0))),
-            _ => None,
-        })
-        .collect()
+        .map_or(0, |h| h.value().saturating_sub(1))
 }

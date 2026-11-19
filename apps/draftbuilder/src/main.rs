@@ -100,19 +100,6 @@ fn report(error: &Error, localizer: &Localizer) {
     );
 }
 
-/// Opens a file named on the command line: a DXF drawing through the open command, anything
-/// else as a document package.
-fn open(app: &mut Application, file: &std::path::Path) -> arc_base::Result<()> {
-    let dxf = file
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
-    if dxf {
-        draftbuilder::open_dxf(app, file).map(drop)
-    } else {
-        app.open(file).map(drop)
-    }
-}
-
 /// Runs the application; the error is the start-up failure as a line for standard error.
 fn start() -> Result<(), String> {
     let fail = |e: Error| draftbuilder::describe(&e, None);
@@ -157,7 +144,7 @@ fn start() -> Result<(), String> {
     let mut app = Application::new(product, config);
     for file in std::env::args_os().skip(1).map(PathBuf::from) {
         // A file that cannot be opened is reported and the application still starts.
-        if let Err(e) = open(&mut app, &file) {
+        if let Err(e) = app.open(&file) {
             report(&e, &localizer);
         }
     }

@@ -17,7 +17,6 @@ arc-draft = { workspace = true }
 arc-gpu = { workspace = true, features = ["draft"] }
 arc-ui = { workspace = true }
 draftbuilder-commands = { path = "../../crates/draftbuilder-commands" }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true
