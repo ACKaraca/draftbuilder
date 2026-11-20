@@ -1,0 +1,40 @@
+name: build
+
+# Started by hand. Builds the Windows applications for manual testing and keeps them as a workflow
+# artifact for two weeks. It publishes nothing: no tag, no release, no package.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: release build (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned toolchain
+        run: rustup toolchain install || rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --release --locked -p draftbuilder -p draftbuilder-cli
+      - name: Collect the applications, the sample drawings and the notices
+        shell: bash
+        run: |
+          mkdir -p dist/samples
+          cp target/release/draftbuilder.exe target/release/draftbuilder-cli.exe dist/
+          cp apps/draftbuilder-cli/tests/data/*.dxf dist/samples/
+          cp LICENSE NOTICE dist/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: draftbuilder-windows-${{ github.sha }}
+          path: dist
+          retention-days: 14
+          if-no-files-found: error
