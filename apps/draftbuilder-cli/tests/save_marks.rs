@@ -133,7 +133,7 @@ fn a_second_save_of_an_unchanged_drawing_keeps_the_handles_of_its_entities() {
 }
 
 #[test]
-#[ignore = "foundation gap: the export numbers its own records (tables, layouts, block markers) above the handles the document has bound, so a second save of the same drawing renumbers them"]
+#[ignore = "foundation rule meets product floor: the export gives its own records (tables, layouts, block markers) handles above the floor, and the first save raises the floor by the handles it bound for layers, linetypes, styles, block records and entities, so a second save renumbers those records (the entities keep theirs)"]
 fn a_second_save_of_an_unchanged_drawing_writes_the_same_bytes_but_the_version() {
     let mut h = Harness::new();
     let first = h.path("first.dxf");

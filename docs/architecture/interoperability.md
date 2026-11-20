@@ -130,6 +130,19 @@ target's permissions. A target that exists and is not a regular file (a director
 refused before anything is written. On Unix the directory is synced after the rename; on Windows it is
 not. A DWG target is refused.
 
+### Preservation in DXF
+
+A DXF import keeps the content the drafting model has no object for and writes it back on save: the
+preserved entities and objects with their groups, the classes, the registered applications, the
+extended data of mapped objects, the dictionaries and the header variables that are not derived, not
+bound to a missing object and not names of missing table entries. Handle references of kept records
+are rewritten to the handles the file is written with; a reference to nothing written is written as
+the null handle and reported. The save writes its own `*Model_Space` and `*Paper_Space` block records,
+one `*Active` viewport and its layouts, and does not keep the view, UCS and viewport tables from the
+file, typed objects other than dictionaries (`XRECORD`, `LAYOUT`, `GROUP`), paper space entities or the
+extended data of block records. A custom entity is kept, but it cannot be selected or moved. The rules and the list of items are in
+[overview](overview.md#open-and-save).
+
 ### Status of the drawing formats
 
 | Format | Read | Write | Validation |

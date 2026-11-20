@@ -224,9 +224,27 @@ opened file. Handles it does not keep:
 - the `BLOCK` and `ENDBLK` records of blocks, the `TABLE` headers and the `VERTEX` and `SEQEND`
   records of classic polylines, which are not objects of the drafting model (a classic polyline is
   written as a lightweight polyline with the handle of its `POLYLINE` record);
-- the viewport, application-name and dimension-style tables, the paper space and model space block
-  records, the layouts and the dictionaries, which the export writes itself (the root dictionary
-  keeps 0xC unless an object holds it);
+- the viewport (`VPORT`), view and UCS tables, the paper space, and the model space and paper space
+  block records, which the export writes itself (one `*Active` viewport, the export's handles for the
+  block records); the layouts and their dictionary are the export's, and the root dictionary keeps
+  0xC unless an object holds it.
+
+DXF preservation at the pinned foundation revision (`arc-draft-dxf`, `c75994d`). Kept, with the
+groups as stored: preserved entities and objects of classes the model does not type; the extended
+data of mapped objects; the `CLASS` records (the instance count is recomputed); the registered
+applications (`ACAD` is added when the file has none, and an application that extended data names
+is added with a new handle); the dictionaries, whose entries are merged into the written root
+(entries whose targets are not written are dropped). Handle references of kept records are
+rewritten through the map of source numbers to written handles; a reference to a record that is not
+written is written as the null handle and reported (`draft.dxf.reference_nulled`), and a preserved
+object whose owner is not written is owned by the root (`draft.dxf.owner_substituted`). Header
+variables are kept, except the derived bounds and times, the code page, names that are not table
+entries, and handle values whose object is not written; each is reported. Not kept: typed objects of
+the OBJECTS section other than dictionaries (`XRECORD`, `LAYOUT`, `GROUP`), the `VIEW` and `UCS`
+tables, paper space entities, the `BLOCK` and `ENDBLK` records, polyline vertices and sequence ends and the
+attribute records of an insert (their extended data is reported as omitted), and the extended data
+of entities the import does not map. A custom entity is a
+preserved record, not a drafting object: the window cannot select it and `MOVE` cannot move it.
 - the standard linetypes (`Continuous`, `ByLayer`, `ByBlock`), which the export writes itself when
   the document has no linetype of that name;
 - the attribute definitions and attribute values of blocks, paper space entities and objects of
@@ -552,8 +570,8 @@ subcommand, which the CLI passes through; both take a decimal number without a s
 refused. A run without `--seed` draws its seed from the operating system
 (`os_seed`), so two new drawings made by two such runs differ; with the same seed the identifiers are the
 same (`tests/seeds.rs`). Two limits remain: a protocol request that names no seed takes the foundation's
-default of 0 (see the gap below); and the export numbers its own records (tables, layouts, block markers)
-above the handles the document has bound, so a second save of the same drawing renumbers them
+default of 0 (see the gap below); and a second save of the same drawing renumbers the records the export
+numbers itself (tables, layouts, block markers), because the floor moved by the first save
 (`save_marks.rs`, ignored test).
 
 Foundation gaps in identifiers, reported to the foundation and not compensated in the product:
@@ -578,20 +596,25 @@ The product's workflows run as scripts, with their tests in `apps/draftbuilder-c
   closed polyline, text, a block with an insert, a custom entity and a custom object of classes the product
   does not model, extended data, an unknown header variable and a fingerprint) is opened, its preservation
   report is read, the plan is moved by a window, the layer of one wall changes, and the drawing is saved.
-  Checks: the report entries, the moved coordinates, the layers, the handles of the entities, the custom
-  object written back group for group, the custom entity's groups and extended data, the identifiers of the
-  entities after an unedited round trip, and the DWG variant (the foundation's DWG fixture opened and saved
-  as DXF).
+  Checks: the open report counts the preserved records (the custom entity, the custom object, the root
+  dictionary, two classes, one application) and drops nothing; the save report has no item of the
+  save's preservation reasons (none fires on this drawing); every preserved record the open reports is
+  written as many times as it was read; the moved coordinates, the layers, the handles of the entities, the
+  custom object written back group for group, the custom entity's groups, the wall's extended data value
+  by value in order (kept as stored, not moved with the wall), the owner of each model space entity naming
+  the written model space block record, the class records with their application and instance count, the
+  application table, the root dictionary entry naming the custom object under its written handle, the
+  identifiers of the entities after an unedited round trip, and the DWG variant (the foundation's DWG
+  fixture opened and saved as DXF).
 
 Gap tests, ignored, each with its reason (run with `--include-ignored`; each fails today):
 
-- the extended data of an ordinary entity is not written back (`w05.rs`);
-- the class records and the application table of a file are not written back (`w05.rs`);
-- the model-space owner of a preserved record is written as the export's own handle (`w05.rs`);
-- the root dictionary entry that names a preserved object is dropped (`w05.rs`);
-- a custom entity does not move with the plan: it is a preserved record, not an object (`w05.rs`);
+- a custom entity does not move with the plan: it is a preserved record, not a drafting object, so the
+  window cannot select it and `MOVE` cannot move it (`w05.rs`);
 - a second save of an unchanged drawing writes the same bytes apart from the version identifier: the
-  export renumbers its own records (`save_marks.rs`).
+  export gives its own records (tables, layouts, block markers) handles above the floor, and the first
+  save raises the floor by the handles it bound, so the second save renumbers those records; the entities
+  keep their handles (`save_marks.rs`).
 
 Not covered by a script, with the reason:
 

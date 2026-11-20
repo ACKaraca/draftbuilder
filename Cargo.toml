@@ -15,17 +15,17 @@ publish = false
 # Third-party versions follow the arc-core lock; every crate listed must also appear in
 # xtask/layers.toml.
 [workspace.dependencies]
-arc-base = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-geom = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-doc = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-command = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-draft = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-draft-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-app = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-gpu = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-ui = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-io-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
-arc-io-dwg = { git = "https://github.com/ACKaraca/arc-core", rev = "a6344f54f599500accc44eec7daf17b23636af3e" }
+arc-base = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-geom = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-doc = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-command = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-draft = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-draft-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-app = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-gpu = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-ui = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-io-dxf = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
+arc-io-dwg = { git = "https://github.com/ACKaraca/arc-core", rev = "c75994d093c2d73e13502aae8b4769b3528f73c0" }
 
 # Image decoding in tests and PNG output only; every other format stays off (as in arc-core).
 image = { version = "0.25.10", default-features = false, features = ["png"] }
