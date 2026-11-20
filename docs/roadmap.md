@@ -120,10 +120,14 @@ sheet sets, checks standards, compares drawings and works with Arc Hub.
   [DB-PLOT-035 to 045](product/capabilities/14-layouts-plotting.md) (phase-2 rows),
   [DB-XREF-023 to 027](product/capabilities/12-references-underlays.md),
   [DB-COLLAB-001 to 023](product/capabilities/17-compare-history-collaboration.md) (phase-2 rows),
-  [DB-INTEROP-024 to 032](product/capabilities/19-interoperability-standards.md).
+  [DB-INTEROP-024 to 032](product/capabilities/19-interoperability-standards.md),
+  [DB-AUTO-037](product/capabilities/18-customization-automation.md) and the phase-2 rows of
+  [DB-ASSIST](product/capabilities/29-assistance.md), which never gate this milestone: each is offered
+  when its task suite passes.
 
 **Dependencies.** M2; `arc-io-dwg` write path; `arc-solve` constraints and expressions;
-`arc-io-pdf` input; `arc-hub-api` and the Arc Hub Documents module (suite phase 2).
+`arc-io-pdf` input; `arc-hub-api` and the Arc Hub Documents module (suite phase 2); the suite assistant host in `arc-app`
+for the assistance rows.
 
 **Exit criteria.**
 
@@ -197,8 +201,8 @@ toolsets on a shared framework.
 commands with preview and explicit apply.
 
 **Scope.** [DB-COLLAB-026 to 029](product/capabilities/17-compare-history-collaboration.md),
-[DB-AUTO-037](product/capabilities/18-customization-automation.md), remaining phase-5 rows of the
-toolset files.
+[DB-ASSIST-019](product/capabilities/29-assistance.md), remaining phase-5 rows of the toolset
+files.
 
 **Dependencies.** M5; Arc Hub stage 2 element-level editing (suite phase 5); resolution of
 [OQ-14](product/open-questions.md) and [OQ-19](product/open-questions.md).

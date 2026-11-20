@@ -47,6 +47,7 @@ Status is never recorded in these tables; it is tracked in GitHub issues and the
 | [26-toolset-mapping.md](26-toolset-mapping.md) | TMAP | Mapping toolset | 58 |
 | [27-toolset-raster.md](27-toolset-raster.md) | TRAST | Raster toolset | 48 |
 | [28-web-and-mobile.md](28-web-and-mobile.md) | WEB | Browser, tablet and phone builds, touch and pen input, command access on small screens, offline drawings, synchronization and shared sessions through Arc Hub | 31 |
+| [29-assistance.md](29-assistance.md) | ASSIST | Optional assistance: commands by intent, drawing questions, standards and cleanup, dimensioning and labels, block recognition, routines, PDF and raster conversion, sheet data, comparison and markups | 23 |
 
 ## Capabilities and issues
 
