@@ -35,6 +35,7 @@ mod acquire;
 mod band;
 mod controller;
 mod fields;
+mod lookup;
 mod resolution;
 
 use arc_base::ObjectId;
@@ -43,6 +44,7 @@ use arc_draft::snap::{ConstraintSource, SnapKind};
 
 pub use acquire::ModifierStep;
 pub use controller::Controller;
+pub use lookup::{CommandEntry, Help, Suggestion, SuggestionKind};
 
 use crate::precision::points::Modifier;
 
@@ -70,7 +72,7 @@ pub fn meters_per_unit(snapshot: &Snapshot) -> f64 {
     crate::draw::create::meters_per_unit(snapshot)
 }
 
-/// The most history lines kept; older lines are dropped.
+/// The history lines kept when `command.history.length` has its default; older lines are dropped.
 pub const MAX_HISTORY: usize = 200;
 
 /// The most tracking paths one resolution reports.
@@ -114,6 +116,13 @@ pub enum Event {
     Undo,
     /// Redo: one step of the document history forward; a waiting command is cancelled first.
     Redo,
+    /// Up: recalls the input line before the one recalled last (the newest first); the text is in
+    /// [`Outputs::recalled`].
+    RecallPrevious,
+    /// Down: recalls the input line after the one recalled last; past the newest, the text is empty.
+    RecallNext,
+    /// Clears the history lines and the recall position.
+    ClearHistory,
 }
 
 /// The host's object pick: the object under a point, in drawing units, with an aperture (the
@@ -295,7 +304,7 @@ pub struct ErrorOut {
 pub struct Outputs {
     /// The active prompt, when a command waits.
     pub prompt: Option<PromptOut>,
-    /// The command history, oldest first, at most [`MAX_HISTORY`] lines.
+    /// The command history, oldest first, at most the length of `command.history.length` lines.
     pub history: Vec<HistoryLine>,
     /// The rubber band or the pending window, when one is drawn.
     pub band: Option<BandOut>,
@@ -313,6 +322,8 @@ pub struct Outputs {
     pub modifier: Option<ModifierOut>,
     /// The errors of this event.
     pub errors: Vec<ErrorOut>,
+    /// The input line a recall event put on the command line; `None` when the event recalled nothing.
+    pub recalled: Option<String>,
 }
 
 /// A point modifier that waits for a point (DB-SNAP-010).

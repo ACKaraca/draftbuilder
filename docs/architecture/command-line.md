@@ -130,6 +130,11 @@ named object, layer, block and style names. Matching is prefix first, then subst
 synonyms and descriptions; recently used entries rank higher. Command search in the interface uses
 the same index, including localized labels and descriptions.
 
+At this revision the headless controller ranks typed names, aliases and setting names (recently run
+commands first, then prefix and substring matches) and suggests a correction for a name that matches
+nothing; `command.autocomplete.on` and `command.autocorrect.on` turn these off. Synonyms and localized
+search are not built. The overview lists the lookups.
+
 ## Non-interactive forms
 
 Every command has three entry forms that share one implementation:

@@ -498,3 +498,8 @@ db-cmd-modify-option-below = Below
 db-cmd-modify-overkill-label = Overkill
 db-cmd-modify-overkill-description = Merges overlapping and collinear lines within a tolerance and erases the duplicates.
 db-cmd-modify-reference-second = Specify second point of the reference length:
+
+# Command line lookups (interaction/lookup.rs, interaction/controller.rs): settings of the session.
+db-setting-command-autocomplete-on = Whether typing on the command line suggests matching commands, aliases and settings.
+db-setting-command-autocorrect-on = Whether a typed name that matches nothing suggests the closest command name.
+db-setting-command-history-length = The number of command-line history lines kept, from 10 to 1000.

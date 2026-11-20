@@ -229,7 +229,7 @@ opened file. Handles it does not keep:
   block records); the layouts and their dictionary are the export's, and the root dictionary keeps
   0xC unless an object holds it.
 
-DXF preservation at the pinned foundation revision (`arc-draft-dxf`, `c75994d`). Kept, with the
+DXF preservation at the pinned foundation revision (`arc-draft-dxf`). Kept, with the
 groups as stored: preserved entities and objects of classes the model does not type; the extended
 data of mapped objects; the `CLASS` records (the instance count is recomputed); the registered
 applications (`ACAD` is added when the file has none, and an application that extended data names
@@ -273,7 +273,7 @@ is refused.
 | Selection | `draftbuilder.select.window`, `crossing`, `window_polygon`, `crossing_polygon`, `fence`, `all`, `last`, `previous`, `filter` (typed `FILTER`) and `similar` return the objects of a space (the model space by default, or any space or block definition named by `space`). Each is a pure function over the snapshot in `select::methods` and `select::query`, with its candidates from `select::candidates`. An entity is tested by its display-list curves with the exact tests of `arc-geom`: inside means every stretch of the curve between its crossings with the boundary lies inside, touching counts, and crossing means any part inside or meeting the boundary. A stroke gives its whole curve, a fill, mask or region its boundary, a block reference all of its flattened primitives, a dimension its strokes and a hatch its boundary and pattern. Text in a stroke font is tested by its curves; text in an outline font by the box of its glyph positions. An entity that is invisible or on an off or frozen layer is never picked; one on a locked layer only with `include_locked`. `previous` applies the same rules to the set it is given, in its order, without repetition. A rectangle with no width or no height is refused (`db.cmd.selection_invalid`). An entity whose display list cannot be built is counted in `skipped` rather than dropped silently. A set argument (`objects`) holds at most 10,000 identifiers and not more than the session's array-length limit (`db.cmd.limit_exceeded`). Names in filters compare with the product's fold (see the layers row). The commands are read-only: they change no document state and create no undo step. The session's current selection is the set `mode` (`replace`, `add`, `remove`) and `within_current` combine with, and the result becomes the session's selection (`Context::set_selection`; the current set becomes the previous one). `previous` is the session's previous selection. `last` is the topmost object (draw order), supplied by the session hook `with_hooks`. The session holds the selection, so a command reads the same set in the protocol, the CLI and the tests. The cycling order of overlapping candidates is a pure function (`select::cycle`). |
 | Layers and properties | `draftbuilder.layer.create` (typed `LAYER`) creates a layer; `draftbuilder.layer.rename` renames one. Names are compared by one fold, `fold::fold`: each character is replaced by its uppercase form, one character at a time (`char::to_uppercase`, so `ß` folds to `SS`). The fold does not depend on position, and it does no trimming and no normalization: a leading space is part of a name, and a composed letter differs from its decomposed form. Turkish letters follow the rule without a locale: `çizgi` and `ÇIZGI` are one name, `ÇİZGİ` is another name (dotted `İ` stays `İ`), and `çızgı` (dotless `ı`) is the same name as `çizgi`. Uniqueness on create and rename, lookup by name, the protected names of purge and the values of selection filters all use this fold, so they agree. Layer `0` and `Defpoints`, in any letter case, cannot be renamed, deleted or merged away (`db.cmd.layer_special`). A layer named by a preserved record of the file keeps its name, by purge's rule (a name that a preserved record contains): rename, delete, delete with contents and merge refuse it (`db.cmd.layer_preserved`). `draftbuilder.layer.delete` removes unused layers; any object that refers to the layer, an entity or a viewport's layer override, refuses it with `db.cmd.layer_in_use`, naming the kind of the referrer. `draftbuilder.layer.delete_with_contents` (`LAYDEL`) removes a layer with every object on it, including objects inside block definitions; it refuses a locked layer that has contents, and it refuses when a dependent object outside the removal sits on a locked layer, because a dimension follows its geometry and would be rewritten. `draftbuilder.layer.merge` (`LAYMRG`) moves the objects of source layers, including block content, to a target and removes the sources; it refuses a locked source or a locked target when the sources have contents, and then nothing changes. Edits to objects on a locked layer are refused with the foundation's `draft.layer.locked`: the foundation's commands refuse them, and the product's commands that write entities directly (property change and match, layer change and match) apply the same one-line rule, because the foundation's check is not public. A property match also refuses a locked source layer, since the copy moves the destinations onto it. `draftbuilder.layer.modify` sets the flags, color, linetype, lineweight, transparency and description of layers; `draftbuilder.layer.on`, `off`, `freeze`, `thaw`, `lock` and `unlock` (typed `LAYON`, `LAYOFF`, `LAYFRZ`, `LAYTHW`, `LAYLCK`, `LAYULK`) act on the layers of chosen objects; `draftbuilder.layer.change` and `match` (`LAYMCH`) move objects to a named layer or to the layer of a source. `draftbuilder.property.change` (typed `CHPROP`, `CHANGE`) and `draftbuilder.property.match` (`MATCHPROP`) set and copy the layer and appearance of objects, with their sources (ByObject, ByLayer or ByBlock). Colors are index colors with their source kept; transparency of a layer is limited to 90 percent. `LINETYPE` is the typed name of `core.draft.linetype.load`. A new drawing holds layer `0`; opening a file without one creates it, and the report carries `db.io.layer_zero_created`. Opening a file whose layer names differ only by case reports the number of such groups (`db.io.layer_name_case_duplicate`): the importer reads each group as one layer. The header variable `$CLAYER` is not stored: the product's save writes only the fingerprint, version GUID and handle seed, and the foundation's export writes `$INSUNITS` and `$HANDSEED`, so a rename cannot leave a stale current-layer name, and there is no current layer to refuse to delete. Each command writes its fields in one transaction, so it is one undo step. Layer 0 of a new drawing gets a handle on save and keeps it on the next save. |
 
-Not implemented yet in selection and layers: picking, grips, highlight and the selection prompt machine (the prompt keywords and the mode switches); implicit windowing; groups; selection isolation and hiding; selection by name of a saved filter; properties by size; the noun-verb use of a selection; layer states; layer isolation; the current layer; layer walk; setting viewport layer overrides (the product refuses to delete a layer they name, but has no command that sets them); the panels. The foundation (pinned `arc-core` at 849f448) lacks: no selection record for a transaction without operations (`arc-command` protocol `run.rs` and `arc-doc` `commit.rs`); `arc-command` caps a session selection at 10,000 identifiers (`protocol/events.rs`, `MAX_SELECTED`); no hook for `last` in the protocol server or in the application's own UI session (`arc-command` `protocol/mod.rs`, `ServerConfig::session`; `arc-app` `application.rs`, `default_session`), so `last` works where the product builds the session (`draftbuilder_commands::with_hooks`); the commit name check compares bytes (`arc-draft` `validate.rs`; the product checks names by its fold on create and rename); no creation order for `last` beyond the draw order of the model space (the `arc-doc` handle orders storage slots, `store.rs`); outline text exposes glyph positions only (`arc-draft` `display.rs`, `Shape::Glyphs`); the layer lock check is not public (`arc-draft` `lock.rs`), so the product repeats its rule for the entities it writes directly.
+Not implemented yet in selection and layers: grips, highlight and the selection prompt keywords and mode switches (picking by a click goes through the controller's `ObjectPicker`); implicit windowing; groups; selection isolation and hiding; selection by name of a saved filter; properties by size; the noun-verb use of a selection; layer states; layer isolation; the current layer; layer walk; setting viewport layer overrides (the product refuses to delete a layer they name, but has no command that sets them); the panels. The foundation (the pinned revision) lacks: no selection record for a transaction without operations (`arc-command` protocol `run.rs` and `arc-doc` `commit.rs`); `arc-command` caps a session selection at 10,000 identifiers (`protocol/events.rs`, `MAX_SELECTED`); no hook for `last` in the protocol server or in the application's own UI session (`arc-command` `protocol/mod.rs`, `ServerConfig::session`; `arc-app` `application.rs`, `default_session`), so `last` works where the product builds the session (`draftbuilder_commands::with_hooks`); the commit name check compares bytes (`arc-draft` `validate.rs`; the product checks names by its fold on create and rename); no creation order for `last` beyond the draw order of the model space (the `arc-doc` handle orders storage slots, `store.rs`); outline text exposes glyph positions only (`arc-draft` `display.rs`, `Shape::Glyphs`); the layer lock check is not public (`arc-draft` `lock.rs`), so the product repeats its rule for the entities it writes directly.
 
 ### Drawing commands (Phase-1 rows of DB-DRAW)
 
@@ -284,7 +284,7 @@ Each command ends in one transaction: a command that creates several entities (L
 its segments, RECTANG with fillet) is one undo step. Points typed or picked in a prompt go through
 the foundation's point entry, so `x,y`, `@x,y`, `@d<a`, `d<a`, the direction lock `<a` and direct
 distances after a pointer direction are read by the foundation. Prompt defaults are shown in angle
-brackets. The prompt form has no preview (the rubber band is not built).
+brackets. The typed prompt form has no preview; the interaction controller draws the rubber line in its outputs (`Outputs::band`).
 
 New entities go to the model space on the current layer, with the current color, linetype, lineweight,
 transparency and linetype scale of the drawing settings; `Creator::new` is the one place that reads them. Coordinates in the typed parameters are numbers in the
@@ -343,7 +343,7 @@ with their own codes. Geometry changes use `arc-geom` (`trim`, `extend`, `split_
 
 | Capability ([rows of 06-modify-2d](../product/capabilities/06-modify-2d.md)) | Command (typed name, alias) | Built | Not built |
 |---|---|---|---|
-| Move | `draftbuilder.modify.move` (`MOVE`, `M`) | A displacement, or a base point and a second point; in place | Drag; rubber band |
+| Move | `draftbuilder.modify.move` (`MOVE`, `M`) | A displacement, or a base point and a second point; in place | Drag |
 | Copy | `draftbuilder.modify.copy` (`COPY`, `CO`) | Copies to one or several target points (single, multiple); the source stays. An array of a set count, spaced by the base-to-second vector or fitted so the last copy lands on the second point (typed `array`, prompt keyword `array`). Objects times copies must fit the session array limit (`db.cmd.limit_exceeded`), and every point must be finite, all checked before any copy | Copies by a typed displacement vector (the targets are points from the base) |
 | Rotate | `draftbuilder.modify.rotate` (`ROTATE`, `RO`) | An angle or a reference pair; the copy option. The prompt form takes the reference angles as typed angles or as picked points (the direction from the base to the point); a picked point at the base is refused | Picked reference points in the typed form (it takes numbers) |
 | Scale | `draftbuilder.modify.scale` (`SCALE`, `SC`) | A factor or a reference length; the copy option. The prompt form takes the reference length as a typed length or the distance between two picked points, and the new length as a typed length or the distance from the base to a picked point | Picked reference points in the typed form (it takes numbers) |
@@ -473,7 +473,7 @@ the running snaps and the low bits are kept; values up to 32767 round-trip.
 
 A user coordinate system is planar, an origin and a unit X direction stored as drawing rows.
 `precision::ucs::plane_transform` gives the transform that the point entry of a script needs for typed
-coordinates (the script runner applies it before each line; the interactive host is not built). A file's
+coordinates (the script runner and the interaction controller apply it before each line). A file's
 system is accepted only when it is planar and right-handed: its origin and X direction have no Z, and a
 stated Y direction is the X direction turned a quarter turn counterclockwise; a mirrored or 3D system is
 ignored and counted in `db.io.header_value_ignored`. The X direction is normalized directly, so a large
@@ -731,7 +731,34 @@ Known gaps of this glue:
   event, so a change made elsewhere shows at the next pointer or line action.
 - Tracking paths are not drawn, and the option bar has no parameter controls.
 - The history labels of the command and cancel lines use the command identifier as their argument.
-  Adapter messages are localized in en-US and tr-TR; the rest of the draftbuilder messages are en-US only.
+  Turkish catalogs (`locales/tr-TR`) exist for the commands, io and application crates; only the commands
+  catalog has a test, which checks its identifiers and placeholders against en-US.
+
+**Command line lookups.** The controller answers these questions from its registry, its session and its
+history. None changes the drawing.
+
+- Input recall. `RecallPrevious` and `RecallNext` (Up and Down) put the input line before or after the
+  one recalled last into `Outputs::recalled`; past the newest line the text is empty. A submitted line
+  starts the recall again. `ClearHistory` drops the history lines. `Controller::search_history` returns the
+  input lines that contain a text, newest first.
+- History length. The session setting `command.history.length` (10 to 1000, default 200) sets how many
+  history lines are kept.
+- Suggestions. `Controller::suggest` ranks the typed names, aliases and setting names: recently run
+  commands first, then names that start with the text, then names that contain it. An empty text suggests
+  the recent commands. When nothing matches, the command whose typed name is closest, within a third of the
+  text's length, is suggested as a correction. `command.autocomplete.on` and `command.autocorrect.on`
+  (both on by default) turn these off.
+- Palette and help. `Controller::search_commands` ranks commands by identifier, typed name, alias and the
+  words of the label key. Results carry message identifiers and aliases, not text. `Controller::help` gives
+  a command's entry in any name form, or the active command with its prompt (message identifier and option
+  labels) when no name is given. The host localizes the messages.
+
+Not built in this area: the palette shows no keyboard shortcut (no shortcut table exists yet); scripts and
+the Lisp interpreter define no commands, so the palette finds only the product's commands; the calculator
+and expressions at prompts need `arc-solve`, which the product does not depend on yet; remembered defaults
+cannot reach a prompt machine, because a machine reads no session settings; alias and profile files are
+stored text formats that are not specified; copy and clipboard of history lines and the Up and Down keys
+belong to the window. The lookups are tested in `tests/command_lookup.rs`.
 
 **Not verified.** No window was run: the rendering, the pointer events, the picking on the GPU and
 the layout of the panels are unverified. The headless tests (`tests/interaction.rs`) drive the

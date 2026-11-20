@@ -549,6 +549,42 @@ pub const TABLE: &[Setting] = &[
         },
     },
     Setting {
+        name: "command.autocomplete.on",
+        compat: None,
+        kind: Kind::Bool,
+        scope: Scope::Session,
+        default: "true",
+        header: None,
+        quantity: Quantity::Neither,
+        description: Text {
+            message_id: "db-setting-command-autocomplete-on",
+        },
+    },
+    Setting {
+        name: "command.autocorrect.on",
+        compat: None,
+        kind: Kind::Bool,
+        scope: Scope::Session,
+        default: "true",
+        header: None,
+        quantity: Quantity::Neither,
+        description: Text {
+            message_id: "db-setting-command-autocorrect-on",
+        },
+    },
+    Setting {
+        name: "command.history.length",
+        compat: None,
+        kind: Kind::Int { min: 10, max: 1000 },
+        scope: Scope::Session,
+        default: "200",
+        header: None,
+        quantity: Quantity::Neither,
+        description: Text {
+            message_id: "db-setting-command-history-length",
+        },
+    },
+    Setting {
         name: "snap.object.on",
         compat: None,
         kind: Kind::Bool,

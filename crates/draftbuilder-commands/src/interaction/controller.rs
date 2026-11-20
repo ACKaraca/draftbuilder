@@ -17,6 +17,7 @@ use serde_json::Map;
 use super::acquire::{self, Acquire, Taken};
 use super::band;
 use super::fields::Fields;
+use super::lookup::{self, CommandEntry, Help, Suggestion};
 use super::resolution::{Resolved, Resolver};
 use super::{
     BandMode, BandOut, CursorOut, ErrorOut, Event, Expect, HistoryLine, LineRole, MAX_HISTORY,
@@ -26,6 +27,7 @@ use crate::draw::create::from_meters;
 use crate::draw::create::meters_per_unit;
 use crate::precision::points::{self, Modifier};
 use crate::select::{Mode, combine};
+use crate::settings;
 use crate::settings::store::Values;
 
 /// The command whose point prompt reads typed points for a waiting modifier: a single point, with
@@ -71,6 +73,10 @@ pub struct Controller {
     /// The last resolved cursor and the raw pointer position it came from.
     cursor: Option<(Resolved, [f64; 2])>,
     history: Vec<HistoryLine>,
+    /// How many input lines back from the newest the last recalled line is; `None` when none is recalled.
+    recall: Option<usize>,
+    /// The text the last recall event recalled, taken by the next outputs.
+    recalled: Option<String>,
     /// The point modifier that waits for points.
     acquire: Acquire,
     seed: u64,
@@ -94,6 +100,8 @@ impl Controller {
             window: None,
             cursor: None,
             history: Vec::new(),
+            recall: None,
+            recalled: None,
             acquire: Acquire::Idle,
             seed: 1,
         })
@@ -176,6 +184,12 @@ impl Controller {
             Event::Tab => self.fields.toggle(),
             Event::Undo => self.undo(document, &mut errors),
             Event::Redo => self.redo(document, &mut errors),
+            Event::RecallPrevious => self.recall_previous(),
+            Event::RecallNext => self.recall_next(),
+            Event::ClearHistory => {
+                self.history.clear();
+                self.recall = None;
+            }
         }
         self.outputs(document, errors)
     }
@@ -212,6 +226,7 @@ impl Controller {
     }
 
     fn submit(&mut self, document: &Document, text: &str, errors: &mut Vec<ErrorOut>) {
+        self.recall = None;
         if text.trim().is_empty() {
             self.empty_line(document, errors);
             return;
@@ -649,11 +664,9 @@ impl Controller {
         push_unit(errors, set);
     }
 
-    fn outputs(&mut self, document: &Document, errors: Vec<ErrorOut>) -> Outputs {
-        let excess = self.history.len().saturating_sub(MAX_HISTORY);
-        self.history.drain(..excess);
-        let snapshot = document.snapshot();
-        let prompt = self.line.active().and_then(|s| {
+    /// The active prompt as the window shows it, when a command waits.
+    fn prompt_out(&self) -> Option<PromptOut> {
+        self.line.active().and_then(|s| {
             s.prompt().map(|p| PromptOut {
                 command: s.command().id().to_owned(),
                 key: p.key.clone(),
@@ -678,7 +691,143 @@ impl Controller {
                     _ => None,
                 },
             })
-        });
+        })
+    }
+
+    /// Recalls the input line before the one recalled last, the newest first.
+    fn recall_previous(&mut self) {
+        let back = self.recall.map_or(0, |b| b + 1);
+        if let Some(text) = self.input_back(back) {
+            self.recall = Some(back);
+            self.recalled = Some(text);
+        }
+    }
+
+    /// Recalls the input line after the one recalled last; past the newest, the line is emptied.
+    fn recall_next(&mut self) {
+        match self.recall {
+            None => {}
+            Some(0) => {
+                self.recall = None;
+                self.recalled = Some(String::new());
+            }
+            Some(back) => {
+                self.recall = Some(back - 1);
+                self.recalled = self.input_back(back - 1);
+            }
+        }
+    }
+
+    /// The input line `back` input lines before the newest one (0 is the newest).
+    fn input_back(&self, back: usize) -> Option<String> {
+        self.history
+            .iter()
+            .rev()
+            .filter(|line| line.role == LineRole::Input)
+            .nth(back)
+            .map(|line| line.text.clone())
+    }
+
+    /// The history length the session setting `command.history.length` gives.
+    fn history_limit(&self) -> usize {
+        match self.session_value("command.history.length") {
+            Some(settings::Value::Int(n)) => usize::try_from(n).unwrap_or(MAX_HISTORY),
+            _ => MAX_HISTORY,
+        }
+    }
+
+    /// The value of the session setting `name` in effect (its default when unset).
+    fn session_value(&self, name: &str) -> Option<settings::Value> {
+        let setting = settings::find(name)?;
+        Some(settings::store::session_current(
+            &|key| self.session.setting(key),
+            setting,
+        ))
+    }
+
+    /// The flag the session setting `name` holds.
+    fn session_flag(&self, name: &str) -> bool {
+        matches!(self.session_value(name), Some(settings::Value::Bool(true)))
+    }
+
+    /// The identifiers of the commands run most recently, the newest first, each once.
+    fn recent_commands(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        self.history
+            .iter()
+            .rev()
+            .filter(|line| line.role == LineRole::Command)
+            .filter(|line| seen.insert(line.text.clone()))
+            .take(lookup::RECENT_COMMANDS)
+            .map(|line| line.text.clone())
+            .collect()
+    }
+
+    /// The input lines that contain `query` (without regard to case), the newest first, at most the
+    /// history length. An empty query, or one longer than [`lookup::MAX_QUERY_BYTES`], matches nothing.
+    #[must_use]
+    pub fn search_history(&self, query: &str) -> Vec<String> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() || query.len() > lookup::MAX_QUERY_BYTES {
+            return Vec::new();
+        }
+        self.history
+            .iter()
+            .rev()
+            .filter(|line| line.role == LineRole::Input)
+            .filter(|line| line.text.to_lowercase().contains(&query))
+            .take(self.history_limit())
+            .map(|line| line.text.clone())
+            .collect()
+    }
+
+    /// The commands whose names or labels match `query`, the best matches first (see
+    /// [`lookup::search`]).
+    #[must_use]
+    pub fn search_commands(&self, query: &str, limit: usize) -> Vec<CommandEntry> {
+        lookup::search(&self.registry, query, limit)
+    }
+
+    /// The suggestions for the text typed on the command line (see [`lookup::suggest`]). Nothing is
+    /// suggested while the setting `command.autocomplete.on` is off; the correction follows
+    /// `command.autocorrect.on`.
+    #[must_use]
+    pub fn suggest(&self, text: &str) -> Vec<Suggestion> {
+        if !self.session_flag("command.autocomplete.on") {
+            return Vec::new();
+        }
+        lookup::suggest(
+            &self.registry,
+            text,
+            &self.recent_commands(),
+            self.session_flag("command.autocorrect.on"),
+        )
+    }
+
+    /// Help for the command `name` in any form the command line reads. With `None`, help for the
+    /// active command and its prompt. `None` when there is no such command.
+    #[must_use]
+    pub fn help(&self, name: Option<&str>) -> Option<Help> {
+        match name {
+            Some(name) => Some(Help {
+                command: lookup::entry_named(&self.registry, name)?,
+                prompt: None,
+            }),
+            None => {
+                let active = self.line.active()?.command().id().to_owned();
+                Some(Help {
+                    command: lookup::entry_named(&self.registry, &active)?,
+                    prompt: self.prompt_out(),
+                })
+            }
+        }
+    }
+
+    fn outputs(&mut self, document: &Document, errors: Vec<ErrorOut>) -> Outputs {
+        let excess = self.history.len().saturating_sub(self.history_limit());
+        self.history.drain(..excess);
+        let snapshot = document.snapshot();
+        let prompt = self.prompt_out();
         let expects_point = prompt
             .as_ref()
             .is_some_and(|p| p.expects.contains(&Expect::Point));
@@ -704,6 +853,7 @@ impl Controller {
         Outputs {
             prompt,
             history: self.history.clone(),
+            recalled: self.recalled.take(),
             band,
             snap: cursor.and_then(|r| {
                 r.snap.map(|kind| SnapOut {

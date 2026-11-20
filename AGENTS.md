@@ -6,10 +6,10 @@ vocabulary, scripts and Lisp routines. Rust only; depends on `arc-core`, never o
 
 ## Status and where to start
 
-Milestone M0 (foundation readiness): the Cargo workspace, `xtask`, the headless crates
-`draftbuilder-model`, `-io` and `-commands`, the headless CLI and the windowed application exist and
-build on one pinned revision of `arc-core`; every other crate and capability is still a
-specification. Read in this order: [docs/README.md](docs/README.md),
+The M1 drawing, modify, selection, layer, precision, settings, script and interaction code exists in
+`draftbuilder-commands`, with the CLI and the windowed application over it, on one pinned
+`arc-core`. Lisp, toolsets and the drawing UI crate are still specifications. Read in this order:
+[docs/README.md](docs/README.md),
 [docs/product/vision.md](docs/product/vision.md),
 [docs/product/capabilities/README.md](docs/product/capabilities/README.md),
 [docs/architecture/overview.md](docs/architecture/overview.md),
@@ -22,13 +22,14 @@ specification. Read in this order: [docs/README.md](docs/README.md),
 Present:
 
 ```
-crates/draftbuilder-model/     fingerprint, stable IDs, handle high-water mark, view of the handle bindings (headless)
+crates/draftbuilder-model/     fingerprint, stable IDs, handle high-water mark, handle bindings (headless)
 crates/draftbuilder-io/        DXF and DWG mapping: header GUIDs, units, export, loss items (headless)
-crates/draftbuilder-commands/  type set, drawing commands, command vocabulary, name forms (headless)
+crates/draftbuilder-commands/  type set, drawing commands, vocabulary, name forms, scripts, interaction (headless)
 apps/draftbuilder/             desktop application (wiring only, over the arc-app shell)
 apps/draftbuilder-cli/         headless CLI: the shared subcommands and `render`
 xtask/                         layers, catalogs, ci
 locales/en-US/                 message catalogs, one per crate that has messages
+locales/tr-TR/                 Turkish catalogs of the same crates
 ```
 
 Planned, not created yet:
