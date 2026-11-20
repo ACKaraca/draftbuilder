@@ -119,16 +119,16 @@ pub fn register(registry: &mut Registry) -> Result<()> {
 ///
 /// `draft.object.wrong_type` for an identifier that names no entity, and the lookup errors.
 pub(crate) fn entity_key(snapshot: &Snapshot, id: ObjectId) -> Result<String> {
+    entity_type(snapshot, id).map(str::to_owned)
+}
+
+/// The type key of the entity `id`, borrowed from the snapshot; the errors of [`entity_key`].
+fn entity_type(snapshot: &Snapshot, id: ObjectId) -> Result<&str> {
     let handle = snapshot.resolve(id)?;
-    let key = snapshot
-        .type_key(handle)
-        .map(|k| k.as_str().to_owned())
-        .unwrap_or_default();
-    if ENTITIES.contains(&key.as_str()) {
-        Ok(key)
-    } else {
-        Err(Error::new(arc_draft::error::codes::OBJECT_WRONG_TYPE)
-            .with_detail("id", id.to_string()))
+    match snapshot.type_key(handle).map(|k| k.as_str()) {
+        Some(key) if ENTITIES.contains(&key) => Ok(key),
+        _ => Err(Error::new(arc_draft::error::codes::OBJECT_WRONG_TYPE)
+            .with_detail("id", id.to_string())),
     }
 }
 
@@ -150,9 +150,11 @@ pub(crate) fn entities(
         return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", limit.to_string()));
     }
     let mut out: Vec<ObjectId> = Vec::with_capacity(list.len());
+    let mut seen: std::collections::HashSet<ObjectId> =
+        std::collections::HashSet::with_capacity(list.len());
     for IdParam(id) in list {
-        entity_key(snapshot, *id)?;
-        if !out.contains(id) {
+        entity_type(snapshot, *id)?;
+        if seen.insert(*id) {
             out.push(*id);
         }
     }
