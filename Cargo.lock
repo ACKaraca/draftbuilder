@@ -750,6 +750,7 @@ dependencies = [
  "arc-base",
  "arc-command",
  "arc-doc",
+ "arc-draft",
  "arc-gpu",
  "arc-io-dwg",
  "arc-io-dxf",

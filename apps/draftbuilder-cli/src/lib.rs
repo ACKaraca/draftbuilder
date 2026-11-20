@@ -15,6 +15,7 @@
 //! DXF drawing, moves, undoes and saves runs over `serve --stdio --create <file> --save
 //! --allow-edit` with the protocol methods `command.run` and `history.undo`.
 
+pub mod bench;
 pub mod render;
 pub mod script;
 
@@ -136,6 +137,11 @@ where
     if args.first().and_then(|a| a.to_str()) == Some("script") {
         args.remove(0);
         return script::run(args, product, &mut stdout, &mut stderr);
+    }
+    if args.first().and_then(|a| a.to_str()) == Some("bench") {
+        // Hidden: the diagnostic timing of the performance targets, not listed in the usage.
+        args.remove(0);
+        return bench::run(args, product, &mut stdout, &mut stderr);
     }
     if args.first().and_then(|a| a.to_str()) != Some("render") {
         // The foundation's `run` takes seed 0 when `--seed` is absent, which gives two new drawings

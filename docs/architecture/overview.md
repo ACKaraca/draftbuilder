@@ -187,6 +187,13 @@ they are design goals, not measurements.
 | Save | Not slower than open for the same drawing | Frequent saving must stay cheap |
 | Lisp entity access | 20,000 entity reads or writes per second through batched protocol calls | Existing batch routines must stay practical out of process |
 
+The targets remain design goals until they are measured on reference hardware. The hidden `bench`
+subcommand of `draftbuilder-cli` times what it can headless: it builds a drawing of a given size and seed
+through the drawing commands, saves and opens it, and times the modify commands with their undo and redo
+(`cargo run --release -p draftbuilder-cli -- bench --entities 100000 --work <dir> [--format json]`). It
+is not part of `cargo xtask ci` and asserts no time. Pan and zoom, snapping and Lisp access are not
+measured by it.
+
 ## Automation surface
 
 Every capability is reachable through the command registry. The registry is exposed through menus

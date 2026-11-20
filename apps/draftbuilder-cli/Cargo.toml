@@ -13,6 +13,7 @@ arc-app = { workspace = true, features = ["render"] }
 arc-base = { workspace = true }
 arc-command = { workspace = true, features = ["headless"] }
 arc-doc = { workspace = true, features = ["package"] }
+arc-draft = { workspace = true }
 arc-gpu = { workspace = true, features = ["draft"] }
 draftbuilder-commands = { path = "../../crates/draftbuilder-commands" }
 serde_json = { workspace = true }
