@@ -16,8 +16,8 @@ use arc_command::{
 };
 use arc_doc::Snapshot;
 use arc_draft::snap::{
-    ConstraintContext, ConstraintSource, Frame, PolarSettings, SnapKind, SnapModes, SnapQuery,
-    SnapStep, constrain, snap_candidates,
+    ConstraintContext, ConstraintSource, Frame, PolarSettings, SnapIndex, SnapKind, SnapModes,
+    SnapQuery, SnapStep, constrain, snap_candidates, snap_candidates_indexed,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -97,15 +97,14 @@ pub fn running_set(values: &Values, over: Override) -> SnapModes {
     }
 }
 
-/// The object snap under the cursor, the best ranked candidate of the running set.
-fn object_snap(
-    request: &Request<'_>,
-    modes: SnapModes,
-    ucs_x: Vector2,
-) -> Result<Option<(SnapKind, Point2)>> {
-    if modes == SnapModes::NONE || request.aperture <= 0.0 {
-        return Ok(None);
-    }
+/// The x axis of the current UCS, as the snap queries take it.
+fn ucs_x_of(snapshot: &Snapshot) -> Vector2 {
+    let ucs = crate::precision::ucs::current(snapshot);
+    Vector2::new(ucs.x_axis[0], ucs.x_axis[1])
+}
+
+/// The snap query of `request` under `modes`.
+fn query_of(request: &Request<'_>, modes: SnapModes) -> SnapQuery {
     let mut query = SnapQuery::new(
         Point2::new(request.cursor[0], request.cursor[1]),
         request.aperture,
@@ -113,8 +112,36 @@ fn object_snap(
         Tolerance::DEFAULT,
     );
     query.from = request.from.map(|p| Point2::new(p[0], p[1]));
-    query.ucs_x = ucs_x;
-    let candidates = snap_candidates(request.snapshot, request.space, &query)?;
+    query.ucs_x = ucs_x_of(request.snapshot);
+    query
+}
+
+/// The object snap under the cursor, the best ranked candidate of the running set.
+fn object_snap(request: &Request<'_>, modes: SnapModes) -> Result<Option<(SnapKind, Point2)>> {
+    if modes == SnapModes::NONE || request.aperture <= 0.0 {
+        return Ok(None);
+    }
+    let candidates = snap_candidates(request.snapshot, request.space, &query_of(request, modes))?;
+    Ok(candidates.first().map(|c| (c.kind, c.point)))
+}
+
+/// The object snap under the cursor, found through `index` (a [`SnapIndex`] of `request.space`
+/// built for the revision of `request.snapshot`) instead of gathering the space again. It is the
+/// candidate [`resolve`] would find. The caller builds and keeps the index.
+///
+/// # Errors
+///
+/// `draft.snap.index_stale` when the index belongs to another revision; the errors of
+/// [`snap_candidates_indexed`](arc_draft::snap::snap_candidates_indexed).
+pub fn object_snap_indexed(
+    request: &Request<'_>,
+    modes: SnapModes,
+    index: &SnapIndex,
+) -> Result<Option<(SnapKind, Point2)>> {
+    if modes == SnapModes::NONE || request.aperture <= 0.0 {
+        return Ok(None);
+    }
+    let candidates = snap_candidates_indexed(request.snapshot, index, &query_of(request, modes))?;
     Ok(candidates.first().map(|c| (c.kind, c.point)))
 }
 
@@ -134,7 +161,7 @@ fn snap_step(values: &Values) -> Option<SnapStep> {
 }
 
 /// The polar alignment in effect, when polar tracking is on.
-fn polar(values: &Values) -> Result<Option<PolarSettings>> {
+pub(crate) fn polar(values: &Values) -> Result<Option<PolarSettings>> {
     if !values.flag(POLAR_ON) {
         return Ok(None);
     }
@@ -158,10 +185,24 @@ fn polar(values: &Values) -> Result<Option<PolarSettings>> {
 /// The errors of the object snap query and of the constraints (`geom.input.not_finite`,
 /// `draft.snap.limit_exceeded`, `draft.geometry.invalid`).
 pub fn resolve(request: &Request<'_>, values: &Values) -> Result<Pick> {
-    let ucs = crate::precision::ucs::current(request.snapshot);
-    let ucs_x = Vector2::new(ucs.x_axis[0], ucs.x_axis[1]);
     let modes = running_set(values, request.over);
-    let snapped = object_snap(request, modes, ucs_x)?;
+    let snapped = object_snap(request, modes)?;
+    resolve_snapped(request, values, snapped)
+}
+
+/// Resolves a pick whose object snap, `snapped`, the caller has already found (with
+/// [`object_snap_indexed`], or `None` for no object snap). [`resolve`] is this with the object
+/// snap found by the query of the request.
+///
+/// # Errors
+///
+/// As [`resolve`].
+pub fn resolve_snapped(
+    request: &Request<'_>,
+    values: &Values,
+    snapped: Option<(SnapKind, Point2)>,
+) -> Result<Pick> {
+    let ucs_x = ucs_x_of(request.snapshot);
     let polar = polar(values)?;
     let context = ConstraintContext {
         frame: Frame::new(ucs_x)?,

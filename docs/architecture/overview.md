@@ -604,6 +604,49 @@ Not covered by a script, with the reason:
   reachable from a script;
 - DWG save (M3) and a save to an older version (DB-DBASE-029).
 
+## Interaction
+
+`draftbuilder-commands::interaction` is the headless controller of the windowed application. It owns
+the `CommandLine` of one document, the cursor, the selection, the pending window and the dynamic
+input, and turns each event into the next `Outputs`: the prompt with its options, the history, the
+rubber band or window, the snap marker, the tracking paths, the dynamic input fields, the selection,
+the resolved cursor and the errors as codes with message identifiers and details. Points are in
+meters, the convention of the prompts; the controller converts to drawing units for the resolution and
+the selection methods.
+
+- Typed lines go to the command line; an empty line accepts the prompt's default, or, with no command,
+  starts the last command again at its first prompt (an interactive restart, not the repeat of the
+  script runner, which runs the last parameters again).
+- A pointer move resolves the cursor through `precision::resolve` with the object snap found in a
+  `SnapIndex` kept for one revision and space: the index is built again only when the revision changes.
+  Hovering an object snap point acquires it, and tracking paths run through the acquired points when no
+  object snap decides. Ortho, polar and the snap step apply as the precision rows say. The pointer
+  direction is set from the last point, so a typed distance is a direct distance.
+- A click answers the active point prompt with the resolved point, or an object prompt with the object
+  under the pointer. With no command, a click on an object adds it to the selection; a click on empty
+  space starts a window, and the second click finishes it as a window (drawn left to right) or a
+  crossing (right to left), added to the selection. A selection prompt takes the same window.
+- Escape clears a locked field or a pending window first, then cancels the command, and with no command
+  clears the selection. Undo steps back one prompt answer of a command, else the document history.
+- A transparent line (`'` prefix) runs beside the waiting command through the command line's rules.
+- Locked dynamic fields (distance and angle from the last point, or X and Y) compose the point on Enter
+  or a click; an invalid number is `db.cmd.value_invalid` and keeps the prompt.
+
+The host supplies the object pick through `ObjectPicker`; the headless `CrossingPicker` picks the
+topmost object whose curves cross the pick box.
+
+**Not in the window yet.** `apps/draftbuilder` has no glue to this controller. The foundation's shell
+does not expose the hooks the glue needs: the viewport answers clicks itself without snapping and
+selects through its own picking (`arc-ui` `gesture`), the shell's `View` and its command line are
+private, the product's tools are registered but never instantiated, and no overlay accepts the
+controller's rubber band, snap marker or dynamic input. The window does not use the controller until
+those hooks exist. Angle fields are in degrees; coordinate format settings (polar or cartesian,
+relative or absolute) and the hover highlight of DB-SEL-011 are not built.
+
+**Not verified.** No window was run: the rendering, the pointer events, the picking on the GPU and
+the layout of the panels are unverified. The headless tests (`tests/interaction.rs`) drive the
+controller with event sequences on a metric drawing and check the outputs and the drawing.
+
 ## Testing strategy
 
 - **Round-trip corpus.** DWG and DXF files from the suite corpus repositories, each with owner,
