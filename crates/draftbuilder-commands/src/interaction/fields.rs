@@ -3,6 +3,8 @@
 //! field follows the cursor. Enter or a click then composes the point from the locked values.
 
 use arc_base::{Error, Result};
+use arc_command::Session;
+use arc_command::prompt::{parse_angle, parse_length};
 use arc_doc::Snapshot;
 
 use super::{DynamicMode, DynamicOut, FieldOut};
@@ -14,6 +16,23 @@ use crate::error::codes;
 pub(super) struct Fields {
     texts: [String; 2],
     focus: usize,
+}
+
+/// What a field holds: a length (drawing units) or an angle (degrees).
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    Length,
+    Angle,
+}
+
+/// The value of typed `text` read the way the command line reads a length or an angle, in drawing
+/// units or in degrees. `None` when the reader refuses the text.
+fn read(text: &str, kind: Kind, snapshot: &Snapshot, session: &Session) -> Option<f64> {
+    let value = match kind {
+        Kind::Length => parse_length(text, session).map(|meters| from_meters(snapshot, meters)),
+        Kind::Angle => parse_angle(text, session).map(f64::to_degrees),
+    };
+    value.ok().filter(|v| v.is_finite())
 }
 
 /// The distance and angle, or X and Y, of a point relative to the base (or the origin) in drawing
@@ -55,15 +74,22 @@ impl Fields {
         self.focus = 1 - self.focus;
     }
 
-    /// The value of field `index`: the typed number when the field is locked, else `fallback`.
-    fn value(&self, index: usize, fallback: f64, field: &'static str) -> Result<f64> {
+    /// The value of field `index` as a `kind`: the typed text read as the command line reads it, else
+    /// `fallback`. Text the reader refuses is `db.cmd.value_invalid` (detail `field`).
+    fn locked(
+        &self,
+        index: usize,
+        kind: Kind,
+        snapshot: &Snapshot,
+        session: &Session,
+        fallback: f64,
+        field: &'static str,
+    ) -> Result<f64> {
         let text = self.texts[index].trim();
         if text.is_empty() {
             return Ok(fallback);
         }
-        text.parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite())
+        read(text, kind, snapshot, session)
             .ok_or_else(|| Error::new(codes::VALUE_INVALID).with_detail("field", field))
     }
 
@@ -76,6 +102,7 @@ impl Fields {
     pub(super) fn compose(
         &self,
         snapshot: &Snapshot,
+        session: &Session,
         base: Option<[f64; 2]>,
         cursor: [f64; 2],
     ) -> Result<[f64; 2]> {
@@ -88,11 +115,17 @@ impl Fields {
         let (mode, here) = parts(base, cursor);
         let (x, y) = match (mode, base) {
             (DynamicMode::Relative, Some(b)) => {
-                let distance = self.value(0, here[0], "distance")?;
-                let angle = self.value(1, here[1], "angle")?.to_radians();
+                let distance =
+                    self.locked(0, Kind::Length, snapshot, session, here[0], "distance")?;
+                let angle = self
+                    .locked(1, Kind::Angle, snapshot, session, here[1], "angle")?
+                    .to_radians();
                 (b[0] + distance * angle.cos(), b[1] + distance * angle.sin())
             }
-            _ => (self.value(0, here[0], "x")?, self.value(1, here[1], "y")?),
+            _ => (
+                self.locked(0, Kind::Length, snapshot, session, here[0], "x")?,
+                self.locked(1, Kind::Length, snapshot, session, here[1], "y")?,
+            ),
         };
         Ok([x * mpu, y * mpu])
     }
@@ -101,6 +134,7 @@ impl Fields {
     pub(super) fn output(
         &self,
         snapshot: &Snapshot,
+        session: &Session,
         base: Option<[f64; 2]>,
         cursor: [f64; 2],
     ) -> DynamicOut {
@@ -110,13 +144,12 @@ impl Fields {
         ];
         let base = base.map(|b| [from_meters(snapshot, b[0]), from_meters(snapshot, b[1])]);
         let (mode, here) = parts(base, cursor);
+        let kinds = match mode {
+            DynamicMode::Relative => [Kind::Length, Kind::Angle],
+            DynamicMode::Absolute => [Kind::Length, Kind::Length],
+        };
         let field = |index: usize| FieldOut {
-            value: self.texts[index]
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .filter(|v| v.is_finite())
-                .unwrap_or(here[index]),
+            value: read(&self.texts[index], kinds[index], snapshot, session).unwrap_or(here[index]),
             locked: !self.texts[index].trim().is_empty(),
             focused: self.focus == index,
         };

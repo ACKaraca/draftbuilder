@@ -24,6 +24,7 @@ use super::{
 };
 use crate::draw::create::{done, drawing_point, machine};
 use crate::error::{Message, codes};
+use crate::settings::remember::{ROTATE_ANGLE, SCALE_FACTOR, offered, remembering};
 
 /// The result of a transform command: the objects it produced, in order. For move, rotate, scale
 /// and align these are the transformed entities; for copy, mirror and the copy option, the copies.
@@ -716,12 +717,14 @@ fn rotate_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
             serde_json::json!({"objects": objects, "base": base, "angle": angle, "copy": copy}),
         );
     }
-    Ok(Step::Ask(
+    Ok(Step::Ask(offered(
+        state,
+        ROTATE_ANGLE,
         Prompt::new("angle", ANGLE.message_id, Accept::angle()).or(Accept::keywords([
             option("copy", OPTION_COPY),
             option("reference", OPTION_REFERENCE),
         ])),
-    ))
+    )))
 }
 
 fn rotate_run(ctx: &mut Context<'_>, p: RotateParams) -> Result<Changed> {
@@ -806,14 +809,16 @@ fn scale_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
             serde_json::json!({"objects": objects, "base": base, "factor": factor, "copy": copy}),
         );
     }
-    Ok(Step::Ask(
+    Ok(Step::Ask(offered(
+        state,
+        SCALE_FACTOR,
         Prompt::new("factor", FACTOR.message_id, Accept::number(Dimension::NONE)).or(
             Accept::keywords([
                 option("copy", OPTION_COPY),
                 option("reference", OPTION_REFERENCE),
             ]),
         ),
-    ))
+    )))
 }
 
 fn scale_check(
@@ -1073,14 +1078,20 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             "draftbuilder.modify.rotate",
             ROTATE_LABEL,
             ROTATE_DESCRIPTION,
-            rotate_run,
+            remembering(rotate_run, |p: &RotateParams, _| {
+                p.angle.map(|a| vec![(ROTATE_ANGLE, a)]).unwrap_or_default()
+            }),
         )
         .with_prompt(machine(rotate_next, reference_check)),
         super::spec(
             "draftbuilder.modify.scale",
             SCALE_LABEL,
             SCALE_DESCRIPTION,
-            scale_run,
+            remembering(scale_run, |p: &ScaleParams, _| {
+                p.factor
+                    .map(|f| vec![(SCALE_FACTOR, f)])
+                    .unwrap_or_default()
+            }),
         )
         .with_prompt(machine(scale_next, scale_check)),
         super::spec(

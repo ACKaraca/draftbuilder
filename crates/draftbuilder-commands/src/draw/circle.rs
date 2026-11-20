@@ -21,6 +21,7 @@ use serde::Deserialize;
 use super::create::{Created, Creator, done, from_meters, keyword_of, machine, option, point_of};
 use super::geometry::{Tangent, circle_through, tangent_circle};
 use crate::error::{Message, codes};
+use crate::settings::remember::{CIRCLE_RADIUS, offered, remembering};
 
 /// A tangent object and the pick point that selects the solution on it.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -165,10 +166,12 @@ fn center_next(state: &PromptState<'_>) -> Result<Step> {
     };
     let Some(radius) = state.answer("radius") else {
         let diameter = option("diameter", OPTION_DIAMETER, Some('d'));
-        return Ok(Step::Ask(
+        return Ok(Step::Ask(offered(
+            state,
+            CIRCLE_RADIUS,
             Prompt::new("radius", RADIUS.message_id, Accept::distance())
                 .or(Accept::keywords([diameter])),
-        ));
+        )));
     };
     if keyword_of(radius) == Some("diameter") {
         let Some(diameter) = distance(state, "diameter") else {
@@ -304,7 +307,15 @@ fn run(ctx: &mut Context<'_>, p: CircleParams) -> Result<Created> {
 /// The commands of the family.
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
-        super::spec("draftbuilder.draw.circle", LABEL, DESCRIPTION, run)
-            .with_prompt(machine(next, check)),
+        super::spec(
+            "draftbuilder.draw.circle",
+            LABEL,
+            DESCRIPTION,
+            remembering(run, |p: &CircleParams, per_unit| match &p.shape {
+                CircleShape::Center { radius, .. } => vec![(CIRCLE_RADIUS, radius * per_unit)],
+                _ => Vec::new(),
+            }),
+        )
+        .with_prompt(machine(next, check)),
     ]
 }

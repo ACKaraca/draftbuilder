@@ -28,6 +28,7 @@ use super::{
 };
 use crate::draw::create::{Creator, done, from_meters, machine};
 use crate::error::{Message, codes};
+use crate::settings::remember::{OFFSET_DISTANCE, offered, remembering};
 
 /// The miter limit of a polyline corner, in units of the offset distance: a corner whose miter point lies
 /// farther than this from the corner is beveled (its two offset ends are joined by a chord), so a very sharp
@@ -309,7 +310,9 @@ fn next(state: &PromptState<'_>) -> arc_base::Result<Step> {
             _ => None,
         })
     else {
-        return Ok(Step::Ask(
+        return Ok(Step::Ask(offered(
+            state,
+            OFFSET_DISTANCE,
             Prompt::new("distance", DISTANCE.message_id, Accept::distance()).or(Accept::keywords(
                 [
                     KeywordOption::new("through", OPTION_THROUGH.message_id),
@@ -317,7 +320,7 @@ fn next(state: &PromptState<'_>) -> arc_base::Result<Step> {
                     KeywordOption::new("multiple", OPTION_MULTIPLE.message_id),
                 ],
             )),
-        ));
+        )));
     };
     objects_then(state, serde_json::json!({"distance": distance}))
 }
@@ -366,7 +369,16 @@ fn check(_: &PromptState<'_>, _: &Prompt, input: &PromptInput) -> arc_base::Resu
 /// The commands of the family.
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
-        super::spec("draftbuilder.modify.offset", LABEL, DESCRIPTION, run)
-            .with_prompt(machine(next, check)),
+        super::spec(
+            "draftbuilder.modify.offset",
+            LABEL,
+            DESCRIPTION,
+            remembering(run, |p: &OffsetParams, per_unit| {
+                p.distance
+                    .map(|d| vec![(OFFSET_DISTANCE, d * per_unit)])
+                    .unwrap_or_default()
+            }),
+        )
+        .with_prompt(machine(next, check)),
     ]
 }

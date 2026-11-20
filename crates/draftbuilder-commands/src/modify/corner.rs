@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use super::{distance_answer, entities, point, point_answer, refuse_locked, replace_with_pieces};
 use crate::draw::create::{Creator, accept_all, done, machine};
 use crate::error::{Message, codes};
+use crate::settings::remember::{
+    CHAMFER_FIRST, CHAMFER_SECOND, FILLET_RADIUS, offered, remembering,
+};
 
 /// An entity of a corner and the point that picks the part kept.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -417,6 +420,24 @@ const OPTION_NOTRIM: Message = Message {
 /// then the radius (fillet) or the two distances (chamfer). The keyword `polyline` on the first
 /// prompt asks for one polyline instead, and the keyword `notrim` keeps the inputs; each answer of
 /// the keyword toggles it.
+/// The radius prompt of a fillet, offering the remembered radius (DB-CMD-004).
+fn radius_ask(state: &PromptState<'_>) -> Step {
+    Step::Ask(offered(
+        state,
+        FILLET_RADIUS,
+        Prompt::new("radius", RADIUS.message_id, Accept::distance()),
+    ))
+}
+
+/// A chamfer distance prompt `key`, offering the remembered distance `remembered` (DB-CMD-004).
+fn distance_ask(state: &PromptState<'_>, key: &str, message: Message, remembered: &str) -> Step {
+    Step::Ask(offered(
+        state,
+        remembered,
+        Prompt::new(key, message.message_id, Accept::distance()),
+    ))
+}
+
 fn corner_next(state: &PromptState<'_>, chamfer: bool) -> arc_base::Result<Step> {
     let polyline_mode = state.answers.iter().any(|a| {
         a.key == "first" && matches!(&a.input, PromptInput::Keyword(k) if k == "polyline")
@@ -480,18 +501,20 @@ fn corner_next(state: &PromptState<'_>, chamfer: bool) -> arc_base::Result<Step>
     let second_pick = point_of(state, "second_pick");
     if chamfer {
         let Some(d1) = distance_of(state, "distance_first") else {
-            return Ok(Step::Ask(Prompt::new(
+            return Ok(distance_ask(
+                state,
                 "distance_first",
-                DISTANCE_FIRST.message_id,
-                Accept::distance(),
-            )));
+                DISTANCE_FIRST,
+                CHAMFER_FIRST,
+            ));
         };
         let Some(d2) = distance_of(state, "distance_second") else {
-            return Ok(Step::Ask(Prompt::new(
+            return Ok(distance_ask(
+                state,
                 "distance_second",
-                DISTANCE_SECOND.message_id,
-                Accept::distance(),
-            )));
+                DISTANCE_SECOND,
+                CHAMFER_SECOND,
+            ));
         };
         return done(serde_json::json!({
             "corner": {
@@ -504,11 +527,7 @@ fn corner_next(state: &PromptState<'_>, chamfer: bool) -> arc_base::Result<Step>
         }));
     }
     let Some(radius) = distance_of(state, "radius") else {
-        return Ok(Step::Ask(Prompt::new(
-            "radius",
-            RADIUS.message_id,
-            Accept::distance(),
-        )));
+        return Ok(radius_ask(state));
     };
     done(serde_json::json!({
         "first": {"object": first, "pick": first_pick},
@@ -543,11 +562,7 @@ fn polyline_corner(state: &PromptState<'_>, chamfer: bool, trim: bool) -> arc_ba
         }));
     }
     let Some(radius) = distance_of(state, "radius") else {
-        return Ok(Step::Ask(Prompt::new(
-            "radius",
-            RADIUS.message_id,
-            Accept::distance(),
-        )));
+        return Ok(radius_ask(state));
     };
     done(serde_json::json!({"polyline": polyline, "radius": radius, "trim": trim}))
 }
@@ -668,11 +683,7 @@ fn fillet_multi_next(state: &PromptState<'_>, trim: bool) -> arc_base::Result<St
         )));
     }
     let Some(radius) = distance_of(state, "radius") else {
-        return Ok(Step::Ask(Prompt::new(
-            "radius",
-            RADIUS.message_id,
-            Accept::distance(),
-        )));
+        return Ok(radius_ask(state));
     };
     let ended = state.answers.last().is_some_and(|a| {
         a.key == "first" && matches!(&a.input, PromptInput::Keyword(k) if k == "end")
@@ -725,14 +736,25 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             "draftbuilder.modify.fillet",
             FILLET_LABEL,
             FILLET_DESCRIPTION,
-            fillet_run,
+            remembering(fillet_run, |p: &FilletParams, per_unit| {
+                vec![(FILLET_RADIUS, p.radius * per_unit)]
+            }),
         )
         .with_prompt(machine(fillet_next, accept_all)),
         super::spec(
             "draftbuilder.modify.chamfer",
             CHAMFER_LABEL,
             CHAMFER_DESCRIPTION,
-            chamfer_run,
+            remembering(chamfer_run, |p: &ChamferParams, per_unit| match &p.corner {
+                ChamferCorner::Pair {
+                    size: ChamferSizeParam::Distances { distances: [a, b] },
+                    ..
+                } => vec![
+                    (CHAMFER_FIRST, a * per_unit),
+                    (CHAMFER_SECOND, b * per_unit),
+                ],
+                _ => Vec::new(),
+            }),
         )
         .with_prompt(machine(chamfer_next, accept_all)),
     ]

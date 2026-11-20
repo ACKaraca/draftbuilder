@@ -331,3 +331,87 @@ fn a_setting_that_may_not_change_while_a_prompt_waits_is_refused() {
     assert_eq!(failure.error.code(), "db.cmd.setting_not_transparent");
     assert_eq!(failure.line, 4);
 }
+
+/// The start and end of every LINE of the DXF text, in file order.
+fn line_ends(text: &str) -> Vec<([f64; 2], [f64; 2])> {
+    section(text, "ENTITIES")
+        .into_iter()
+        .filter(|r| r[0].1 == "LINE")
+        .map(|r| {
+            let at = |x: i64, y: i64| [values_of(&r, x)[0], values_of(&r, y)[0]];
+            (at(10, 20), at(11, 21))
+        })
+        .collect()
+}
+
+#[test]
+fn typed_polar_and_relative_points_are_exact_in_a_millimeter_drawing() {
+    // DB-SNAP-020 (planar part) and DB-SNAP-024: the polar and relative forms in millimeters.
+    let mut h = Harness::new();
+    let output = h.path("polar-mm.dxf");
+    let report = h.run(&format!(
+        "NEW unit=millimeter\nLINE\n0,0\n1000<90\n@500<0\n\nSAVE path={}\n",
+        quoted(&output)
+    ));
+    assert!(
+        report.failure.is_none(),
+        "{:?}",
+        report.failure.as_ref().map(|f| f.error.code())
+    );
+    let text = std::fs::read_to_string(&output).unwrap();
+    assert_points(
+        &line_ends(&text),
+        &[
+            ([0.0, 0.0], [0.0, 1000.0]),
+            ([0.0, 1000.0], [500.0, 1000.0]),
+        ],
+    );
+}
+
+#[test]
+fn typed_polar_and_relative_points_follow_a_rotated_user_coordinate_system() {
+    // The UCS origin is (10, 10) millimeters (UCS parameters are meters) and its X axis points along world Y, so its linear part turns
+    // every offset by 90 degrees: local 3<0 is world (10, 13), and @2<90 from it is world (8, 13).
+    let mut h = Harness::new();
+    let output = h.path("polar-ucs.dxf");
+    let report = h.run(&format!(
+        "NEW unit=millimeter\nUCS mode=origin origin=0.01,0.01 x_point=0.01,0.011\nLINE\n0,0\n3<0\n@2<90\n\nSAVE path={}\n",
+        quoted(&output)
+    ));
+    assert!(
+        report.failure.is_none(),
+        "{:?}",
+        report.failure.as_ref().map(|f| f.error.code())
+    );
+    let text = std::fs::read_to_string(&output).unwrap();
+    assert_points(
+        &line_ends(&text),
+        &[([10.0, 10.0], [10.0, 13.0]), ([10.0, 13.0], [8.0, 13.0])],
+    );
+}
+
+#[test]
+fn cylindrical_and_spherical_points_are_refused_by_planar_prompts() {
+    // DB-SNAP-020 gap: the foundation reads `d<a,z` and `d<a<e`, but every point prompt of the
+    // product is planar (Point2 entities), so a height or an elevation is refused.
+    for typed in ["1000<45,200", "@1000<45<30"] {
+        let mut h = Harness::new();
+        let report = h.run(&format!("NEW unit=millimeter\nLINE\n0,0\n{typed}\n"));
+        let failure = report.failure.as_ref().unwrap();
+        assert_eq!(failure.error.code(), "cmd.prompt.range", "{typed}");
+        let details = format!("{:?}", failure.error.details());
+        assert!(details.contains("dimensions"), "{typed}: {details}");
+        assert_eq!(failure.line, 4, "{typed}");
+    }
+}
+
+/// Asserts that the LINEs `actual` are `expected` within a nanometer-scale tolerance, since the
+/// trigonometry of a polar point is not exact in binary floating point.
+fn assert_points(actual: &[([f64; 2], [f64; 2])], expected: &[([f64; 2], [f64; 2])]) {
+    assert_eq!(actual.len(), expected.len(), "{actual:?}");
+    for ((a0, a1), (e0, e1)) in actual.iter().zip(expected) {
+        for (a, e) in a0.iter().chain(a1).zip(e0.iter().chain(e1)) {
+            assert!((a - e).abs() < 1e-9, "{actual:?} != {expected:?}");
+        }
+    }
+}

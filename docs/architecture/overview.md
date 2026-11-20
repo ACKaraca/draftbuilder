@@ -435,6 +435,16 @@ two sessions of one document do not see each other's (`tests/review_settings.rs`
 changes no document state, creates no undo step and takes effect when its command succeeds (checked by
 `tests/review_settings.rs`). Profiles are not built.
 
+Remembered defaults (DB-CMD-004, `settings::remember`) are session keys in the same namespace that are not
+rows of the settings table, since they are a command's memory and not user settings: `draftbuilder.remembered.`
+followed by the offset distance, fillet radius, the two chamfer distances, polygon sides, circle radius, rotate
+angle and scale factor. A command stores the value it ran with, in SI units (meters, radians or a number), only
+when it succeeds, through `Context::set_setting`; a full store is ignored, so a stored value never fails a
+command. The prompt that asks the parameter offers the value as its default when one of its accepted kinds
+admits it (within the kind's bounds, whole for an integer). The foundation's `PromptStep::with_remembered_default`
+belongs to a `PromptSequence`, which these commands do not use, so the product applies the same rule to the
+prompts it builds by hand. Tests: `crates/draftbuilder-commands/tests/remembered_defaults.rs`.
+
 Header variables, read on open (`settings::header::load_header`) and written on save
 (`settings::header::header_values`). The product reads and writes its own settings and the current
 coordinate system. The other header variables of a file are kept by the foundation's export, in their
@@ -696,7 +706,12 @@ the selection methods.
   clears the selection. Undo steps back one prompt answer of a command, else the document history.
 - A transparent line (`'` prefix) runs beside the waiting command through the command line's rules.
 - Locked dynamic fields (distance and angle from the last point, or X and Y) compose the point on Enter
-  or a click; an invalid number is `db.cmd.value_invalid` and keeps the prompt.
+  or a click. A field's text is read by the foundation's `prompt::parse_length` and `prompt::parse_angle`,
+  as the command line reads one value (units, feet and inches, expressions, the byte cap), in the session's
+  units of the drawing; text the reader refuses is `db.cmd.value_invalid` and keeps the prompt (DB-SNAP-024).
+- A typed `undo` at a prompt that reads no text steps back the prompt answer, as the undo event does, also
+  at a pick or point prompt (the foundation would refuse the word with `cmd.prompt.unreadable`); the
+  controller's test `a_typed_undo_steps_back_trim_from_its_target_prompt_to_the_edges_answer` covers it.
 - Point modifiers (DB-SNAP-010) are one-shot: while a point prompt waits, the keyword `FROM`, `TEMPTRACK`
   or `MIDBETWEEN` (typed, or as `Event::Option`) starts one. A keyword that the prompt's own options
   claim (by identifier or one-letter shortcut, not by label) is the command's, and no modifier starts
@@ -716,10 +731,14 @@ the selection methods.
 - `UNITS` (`draftbuilder.precision.units`, DB-SNAP-030) sets the length and angle formats, their
   precision, the angle base and the clockwise flag as drawing settings: one undoable step, validated
   by each setting's own range, and no stored coordinate changes (`precision::units`).
-- Not built in the precision area, as foundation or window gaps: cylindrical and spherical typed points
-  (DB-SNAP-020: the foundation point reader has no such form, so the row is not compensated here);
-  dynamic-field values are plain decimal numbers in drawing units, so feet-and-inches and bearings are
-  typed on the command line only (DB-SNAP-024); the dynamic fields also ignore the current user
+- Cylindrical (`distance<angle,z`) and spherical (`distance<angle<elevation`) typed points (DB-SNAP-020):
+  the foundation reads both forms, with relative and world prefixes, but every point prompt of the product
+  is planar (`PointDims::Two`, planar `Point2` entities), so the product refuses them with `cmd.prompt.range`
+  (detail `reason` = `dimensions`) and changes nothing (`apps/draftbuilder-cli/tests/script_engine.rs`). A height or an elevation
+  needs a point prompt that accepts three dimensions and a model that stores Z, which is a change of the
+  DXF mapping and needs a human decision. The planar polar and relative forms, in millimeters and under a
+  rotated user coordinate system, are exact in `apps/draftbuilder-cli/tests/script_engine.rs`.
+- Not built in the precision area, as foundation or window gaps: the dynamic fields also ignore the current user
   coordinate system and the drawing's angle base, while typed points honour both: a known gap of
   DB-SNAP-021 (the fields are measured in world coordinates from the base); the isometric and polar snap styles and the
   isometric planes (DB-SNAP-017, 018); the 3D point filters (DB-SNAP-011); the snap marker cycling
@@ -792,8 +811,7 @@ history. None changes the drawing.
 
 Not built in this area: the palette shows no keyboard shortcut (no shortcut table exists yet); scripts and
 the Lisp interpreter define no commands, so the palette finds only the product's commands; the calculator
-and expressions at prompts need `arc-solve`, which the product does not depend on yet; remembered defaults
-cannot reach a prompt machine, because a machine reads no session settings; alias and profile files are
+and expressions at prompts need `arc-solve`, which the product does not depend on yet; alias and profile files are
 stored text formats that are not specified; copy and clipboard of history lines and the Up and Down keys
 belong to the window. The lookups are tested in `tests/command_lookup.rs`.
 

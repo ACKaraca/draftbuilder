@@ -256,6 +256,10 @@ impl Controller {
             self.select_keyword(document, id, errors);
             return;
         }
+        if self.typed_undo(text) {
+            self.undo(document, errors);
+            return;
+        }
         if let Some(modifier) = self.typed_modifier(text) {
             self.start_modifier(modifier);
             return;
@@ -314,8 +318,11 @@ impl Controller {
     fn compose(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) -> Option<[f64; 2]> {
         let (resolved, _) = self.cursor.clone()?;
         let snapshot = document.snapshot();
+        self.session.units = crate::script::session_units(&snapshot);
         let base = self.point_base();
-        let composed = self.fields.compose(&snapshot, base, resolved.point);
+        let composed = self
+            .fields
+            .compose(&snapshot, &self.session, base, resolved.point);
         push_result(errors, composed)
     }
 
@@ -905,6 +912,21 @@ impl Controller {
         })
     }
 
+    /// Whether `text` is the word `undo` typed at a prompt that reads no text: it steps back the
+    /// prompt answer, as the undo event does. The foundation reads any other word as a typed answer,
+    /// which would refuse it with `cmd.prompt.unreadable`. A text prompt keeps the word as text.
+    fn typed_undo(&self, text: &str) -> bool {
+        let Some(prompt) = self.line.active().and_then(|s| s.prompt()) else {
+            return false;
+        };
+        text.trim().eq_ignore_ascii_case("undo")
+            && !prompt
+                .accepts
+                .iter()
+                .any(|accept| matches!(accept, Accept::Text { .. }))
+            && !acquire::claimed_by(prompt, text)
+    }
+
     /// Applies a keyword of a selection prompt. Shape keywords set the shape of the next gesture;
     /// the others are gestures (`all`, `last`, `previous`) or change the gathering.
     fn select_keyword(&mut self, document: &Document, id: &str, errors: &mut Vec<ErrorOut>) {
@@ -1180,6 +1202,7 @@ impl Controller {
         let excess = self.history.len().saturating_sub(self.history_limit());
         self.history.drain(..excess);
         let snapshot = document.snapshot();
+        self.session.units = crate::script::session_units(&snapshot);
         let prompt = self.prompt_out();
         let expects_point = prompt
             .as_ref()
@@ -1203,7 +1226,7 @@ impl Controller {
             _ => None,
         };
         let dynamic = match (&cursor, expects_point) {
-            (Some(r), true) => Some(self.fields.output(&snapshot, base, r.point)),
+            (Some(r), true) => Some(self.fields.output(&snapshot, &self.session, base, r.point)),
             _ => None,
         };
         Outputs {

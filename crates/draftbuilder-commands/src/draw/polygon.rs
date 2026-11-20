@@ -16,6 +16,7 @@ use serde::Deserialize;
 use super::create::{Created, Creator, done, keyword_of, machine, option, point_of};
 use super::geometry::{PolygonMode, polygon_about, polygon_edge};
 use crate::error::{Message, codes};
+use crate::settings::remember::{POLYGON_SIDES, offered, remembering};
 
 /// The fewest sides of a polygon.
 const MIN_SIDES: usize = 3;
@@ -121,7 +122,7 @@ fn next(state: &PromptState<'_>) -> Result<Step> {
             },
         )
         .with_default(PromptInput::Number(Quantity::new(4.0, Dimension::NONE)));
-        return Ok(Step::Ask(prompt));
+        return Ok(Step::Ask(offered(state, POLYGON_SIDES, prompt)));
     }
     let sides = sides_of(state).unwrap_or(MIN_SIDES);
     match state.answer("first") {
@@ -232,7 +233,14 @@ fn run(ctx: &mut Context<'_>, p: PolygonParams) -> Result<Created> {
 /// The commands of the family.
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
-        super::spec("draftbuilder.draw.polygon", LABEL, DESCRIPTION, run)
-            .with_prompt(machine(next, check)),
+        super::spec(
+            "draftbuilder.draw.polygon",
+            LABEL,
+            DESCRIPTION,
+            remembering(run, |p: &PolygonParams, _| {
+                vec![(POLYGON_SIDES, p.sides as f64)]
+            }),
+        )
+        .with_prompt(machine(next, check)),
     ]
 }

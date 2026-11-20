@@ -12,6 +12,7 @@
 //! A setting with no DXF header variable keeps its value in the rows only.
 
 pub mod header;
+pub mod remember;
 pub mod store;
 
 use arc_base::color::indexed_rgb;

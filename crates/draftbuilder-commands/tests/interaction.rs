@@ -650,6 +650,114 @@ fn typed_dynamic_fields_lock_and_compose_the_point() {
     assert_eq!(segments(&env), vec![([0.0, 0.0], [10.0, 0.0])]);
 }
 
+/// The end of a line from (0, 0) whose distance field holds `distance` (angle 0) in a millimeter
+/// drawing, as a dynamic field types it (DB-SNAP-024).
+fn field_distance_end(distance: &str) -> [f64; 2] {
+    let (env, mut c) = setup_in("millimeter");
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: distance.to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "0".to_owned(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    let lines = segments(&env);
+    assert_eq!(lines.len(), 1, "{distance}");
+    lines[0].1
+}
+
+/// The same distance typed on the command line, as `@distance,0` from the same start.
+fn typed_distance_end(distance: &str) -> [f64; 2] {
+    let (env, mut c) = setup_in("millimeter");
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "0,0");
+    let out = submit(&env, &mut c, &format!("@{distance},0"));
+    assert!(out.errors.is_empty(), "{distance}: {:?}", out.errors);
+    submit(&env, &mut c, "");
+    segments(&env)[0].1
+}
+
+#[test]
+fn a_typed_field_length_gives_the_value_the_command_line_gives() {
+    // DB-SNAP-024: feet and inches, a unit suffix and an expression, in a millimeter drawing; a bare
+    // number is in the drawing's unit.
+    for (text, expected_mm) in [("3'-6\"", 1066.8), ("1.5 m", 1500.0), ("2*250", 500.0)] {
+        let field = field_distance_end(text);
+        let typed = typed_distance_end(text);
+        assert!(
+            near(field, typed),
+            "{text}: field {field:?}, command line {typed:?}"
+        );
+        assert!(
+            (field[0] - expected_mm).abs() < 1e-9 && field[1].abs() < 1e-9,
+            "{text}: {field:?}"
+        );
+    }
+}
+
+#[test]
+fn a_locked_length_field_shows_the_value_it_reads_in_drawing_units() {
+    let (env, mut c) = setup_in("millimeter");
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    let out = send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "3'-6\"".to_owned(),
+        },
+    );
+    let dynamic = out.dynamic.unwrap();
+    assert!(
+        (dynamic.fields[0].value - 1066.8).abs() < 1e-9,
+        "{dynamic:?}"
+    );
+    assert!(dynamic.fields[0].locked);
+}
+
+#[test]
+fn a_locked_angle_field_reads_units_the_command_line_reads() {
+    // A gon (gradian) is a hundredth of a right angle: 100 gon is 90 degrees, so the line goes up.
+    let (env, mut c) = setup_in("millimeter");
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "1000".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "100 gon".to_owned(),
+        },
+    );
+    submit(&env, &mut c, "");
+    submit(&env, &mut c, "");
+    let end = segments(&env)[0].1;
+    assert!(near(end, [0.0, 1000.0]), "{end:?}");
+}
+
 #[test]
 fn an_invalid_locked_field_is_an_error_and_keeps_the_prompt() {
     let (env, mut c) = setup();
@@ -1401,4 +1509,41 @@ fn a_lasso_drops_vertices_within_the_linear_tolerance_of_the_one_before() {
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let picked: Vec<String> = out.selection.iter().map(ToString::to_string).collect();
     assert_eq!(picked, vec![a]);
+}
+
+#[test]
+fn a_typed_undo_steps_back_trim_from_its_target_prompt_to_the_edges_answer() {
+    // TRIM: the edges answer is a click, the next prompt is the target; the typed word `undo` steps
+    // back to the edges prompt (it was refused as an unreadable answer), which answers again by a
+    // click and by a typed identifier.
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 10.0, 0.0);
+    submit(&env, &mut c, "");
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 5.0, -5.0);
+    click(&env, &mut c, 5.0, 5.0);
+    submit(&env, &mut c, "");
+    let edge = common::entity_ids(&env.document.snapshot())[0].clone();
+
+    submit(&env, &mut c, "TRIM");
+    let out = click(&env, &mut c, 0.0, 0.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
+
+    let out = submit(&env, &mut c, "undo");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("edges"));
+
+    let out = click(&env, &mut c, 0.0, 0.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
+
+    let out = submit(&env, &mut c, "undo");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let out = submit(&env, &mut c, &edge);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
+    send(&env, &mut c, Event::Escape);
 }
