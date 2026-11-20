@@ -7,7 +7,9 @@
 //! one undo step. The families are one module each: [`transform`] (MOVE, COPY, ROTATE, SCALE,
 //! MIRROR, ALIGN), [`erase`] (ERASE), [`explode`] (EXPLODE), [`stretch`] (STRETCH), [`trim`]
 //! (TRIM, EXTEND), [`offset`] (OFFSET), [`corner`] (FILLET, CHAMFER), [`breaking`] (BREAK),
-//! [`join`] (JOIN) and [`lengthen`] (LENGTHEN).
+//! [`join`] (JOIN), [`lengthen`] (LENGTHEN), [`reverse`] (REVERSE), [`pedit`] (PEDIT, open and close), [`change`]
+//! (the endpoint of a line or the radius of a circle), [`flatten`] (FLATTEN), [`order`] (DRAWORDER) and
+//! [`overkill`] (OVERKILL, lines).
 //!
 //! Shared rules, applied by every family:
 //!
@@ -27,12 +29,18 @@
 
 pub mod array;
 pub mod breaking;
+pub mod change;
 pub mod corner;
 pub mod erase;
 pub mod explode;
+pub mod flatten;
 pub mod join;
 pub mod lengthen;
 pub mod offset;
+pub mod order;
+pub mod overkill;
+pub mod pedit;
+pub mod reverse;
 pub mod stretch;
 pub mod transform;
 pub mod trim;
@@ -92,7 +100,13 @@ pub fn register(registry: &mut Registry) -> Result<()> {
         .chain(corner::specs())
         .chain(breaking::specs())
         .chain(join::specs())
-        .chain(lengthen::specs());
+        .chain(lengthen::specs())
+        .chain(reverse::specs())
+        .chain(pedit::specs())
+        .chain(change::specs())
+        .chain(flatten::specs())
+        .chain(order::specs())
+        .chain(overkill::specs());
     for spec in specs {
         registry.register(spec)?;
     }
@@ -444,6 +458,22 @@ pub(crate) fn entity_selection() -> Accept {
         max: None,
         types: ENTITIES.iter().map(|k| (*k).to_owned()).collect(),
     }
+}
+
+/// The accept of a whole number of at least one, up to the largest count a command takes (copies, offsets).
+pub(crate) fn count_accept() -> Accept {
+    Accept::Number {
+        dimension: arc_base::Dimension::NONE,
+        min: Some(1.0),
+        max: Some(f64::from(u32::MAX)),
+        integer: true,
+    }
+}
+
+/// The whole number of a count answer (see [`count_accept`]), when it is one.
+pub(crate) fn count_answer(state: &PromptState<'_>, key: &str) -> Option<u32> {
+    let value = number_answer(state, key)?;
+    format!("{:.0}", value.round()).parse().ok()
 }
 
 /// The accept of a point in two dimensions.

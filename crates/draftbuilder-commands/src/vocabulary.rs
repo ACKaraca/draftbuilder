@@ -201,6 +201,42 @@ pub const NAMES: &[Name] = &[
         aliases: &["LEN"],
     },
     Name {
+        id: "draftbuilder.modify.reverse",
+        area: Area::Modify,
+        typed: Some("REVERSE"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.modify.pedit",
+        area: Area::Modify,
+        typed: Some("PEDIT"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.modify.change",
+        area: Area::Modify,
+        typed: None,
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.modify.flatten",
+        area: Area::Modify,
+        typed: Some("FLATTEN"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.modify.draw_order",
+        area: Area::Modify,
+        typed: Some("DRAWORDER"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.modify.overkill",
+        area: Area::Modify,
+        typed: Some("OVERKILL"),
+        aliases: &[],
+    },
+    Name {
         id: "draftbuilder.draw.line",
         area: Area::Draw,
         typed: Some("LINE"),

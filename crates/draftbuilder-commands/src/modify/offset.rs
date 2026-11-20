@@ -2,19 +2,22 @@
 //! distance. The side is given by a point: the copy lies on the side of that point (to the left of the
 //! direction of travel when the point is on the left), or the distance is the distance of the
 //! `through` point from each entity. The copies are new entities on the layer and with the appearance of
-//! their source. With `erase_source` the sources are erased after the copies are made.
+//! their source, or on the current layer with `layer: current`. With `erase_source` the sources are erased after
+//! the copies are made. With `repeat` (multiple mode) each source makes that many offsets, each from the last
+//! result at the same distance; not with `through`.
 //!
 //! Polyline corners are mitered up to [`MITER_LIMIT`] times the distance and beveled beyond it. Copies of
 //! an object that the offset splits into several curves are one polyline when they join end to end, and
 //! otherwise one entity each. A side point on the entity is refused, since it picks no side. Rays and
 //! construction lines offset through their own parallel constructions. The last distance is not remembered
-//! between commands, and the repeated offset from the last result is not built.
+//! between commands.
 
 use arc_base::math::Point2;
-use arc_base::{Error, Result, Tolerance};
+use arc_base::{Error, ObjectId, Result, Tolerance};
 use arc_command::{
     Accept, CommandSpec, Context, IdParam, KeywordOption, Prompt, PromptInput, PromptState, Step,
 };
+use arc_doc::Value;
 use arc_geom::{Composite2, Curve2, CurveEval, CurveProject, JoinStyle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -50,6 +53,28 @@ pub struct OffsetParams {
     /// Whether the sources are erased after the copies are made.
     #[serde(default)]
     pub erase_source: bool,
+    /// The layer of the copies: the source's (the default) or the current layer.
+    #[serde(default)]
+    pub layer: OffsetLayer,
+    /// How many offsets each source makes, each taken from the last result (multiple mode); one by default.
+    /// Not with `through`.
+    #[serde(default = "one")]
+    pub repeat: u32,
+}
+
+/// The layer the copies of an offset go to.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OffsetLayer {
+    /// The layer of the source.
+    #[default]
+    Source,
+    /// The current layer of the drawing.
+    Current,
+}
+
+fn one() -> u32 {
+    1
 }
 
 /// The result of an offset: the copies, in order.
@@ -79,6 +104,24 @@ const SIDE: Message = Message {
 };
 const OPTION_THROUGH: Message = Message {
     message_id: "db-cmd-modify-option-through",
+};
+const OPTION_LAYER: Message = Message {
+    message_id: "db-cmd-modify-option-layer",
+};
+const OPTION_MULTIPLE: Message = Message {
+    message_id: "db-cmd-modify-option-multiple",
+};
+const LAYER_MODE: Message = Message {
+    message_id: "db-cmd-modify-offset-layer",
+};
+const REPEAT: Message = Message {
+    message_id: "db-cmd-modify-offset-repeat",
+};
+const OPTION_SOURCE: Message = Message {
+    message_id: "db-cmd-modify-option-source",
+};
+const OPTION_CURRENT: Message = Message {
+    message_id: "db-cmd-modify-option-current",
 };
 
 /// The signed distance of the copy of `curve` that passes the side point `side` at `distance`:
@@ -142,10 +185,30 @@ fn run(ctx: &mut Context<'_>, p: OffsetParams) -> Result<Changed> {
     if p.through.is_none() && !(distance.is_finite() && distance > 0.0) {
         return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "distance"));
     }
+    if p.repeat == 0 || (p.through.is_some() && p.repeat != 1) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "repeat"));
+    }
+    let limit = usize::try_from(ctx.limits().array_length).unwrap_or(usize::MAX);
+    if ids
+        .len()
+        .checked_mul(usize::try_from(p.repeat).unwrap_or(usize::MAX))
+        .is_none_or(|copies| copies > limit)
+    {
+        return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
+    }
+    let current_layer = match p.layer {
+        OffsetLayer::Source => None,
+        OffsetLayer::Current => Some(
+            crate::settings::current_layer(&snapshot)
+                .ok_or_else(|| Error::new(codes::PARAMS_CONFLICT).with_detail("field", "layer"))?,
+        ),
+    };
     if p.erase_source {
         refuse_locked(&snapshot, &ids)?;
     }
     let mut creator = Creator::new(&snapshot)?;
+    // Every piece made is counted as it is made: one source can offset into several pieces per offset.
+    let mut made: usize = 0;
     for id in &ids {
         let curve = super::required_curve(&snapshot, *id)?;
         let at = if p.through.is_some() {
@@ -159,10 +222,26 @@ fn run(ctx: &mut Context<'_>, p: OffsetParams) -> Result<Changed> {
         let signed = signed_distance(&curve, side, at, &tolerance)?;
         let object = snapshot.get(snapshot.resolve(*id)?)?;
         let owner = object.header.owner;
-        for piece in pieces(&curve, signed, ctx)? {
-            let key = super::key_of_curve(&piece);
-            let values = super::appearance_values(&snapshot, key, &object.values, &piece);
-            creator.add_values(ctx, key, owner, values)?;
+        // Multiple mode: each offset starts from the pieces of the last one, at the same signed distance.
+        let mut last = vec![curve];
+        for _ in 0..p.repeat {
+            let mut next = Vec::new();
+            for source in &last {
+                next.extend(pieces(source, signed, ctx)?);
+            }
+            made = made.saturating_add(next.len());
+            if made > limit {
+                return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
+            }
+            for piece in &next {
+                let key = super::key_of_curve(piece);
+                let mut values = super::appearance_values(&snapshot, key, &object.values, piece);
+                if let Some(layer) = current_layer {
+                    set_layer(&mut values, layer);
+                }
+                creator.add_values(ctx, key, owner, values)?;
+            }
+            last = next;
         }
     }
     let created = creator.into_ids();
@@ -175,10 +254,43 @@ fn run(ctx: &mut Context<'_>, p: OffsetParams) -> Result<Changed> {
     })
 }
 
+/// Stores the layer reference of an entity's values.
+fn set_layer(values: &mut [Option<Value>], layer: ObjectId) {
+    if let Some(slot) = values.get_mut(arc_draft::types::entity::LAYER) {
+        *slot = Some(Value::Reference(layer));
+    }
+}
+
+fn keyword_at(state: &PromptState<'_>, key: &str, word: &str) -> bool {
+    state
+        .answers
+        .iter()
+        .any(|a| a.key == key && matches!(&a.input, PromptInput::Keyword(k) if k == word))
+}
+
 fn next(state: &PromptState<'_>) -> arc_base::Result<Step> {
-    let through_chosen = state.answers.iter().any(|a| {
-        a.key == "distance" && matches!(&a.input, PromptInput::Keyword(k) if k == "through")
-    });
+    // The keywords of the distance prompt that take a further answer: the layer, then the multiple count.
+    if keyword_at(state, "distance", "layer") && state.answer("layer_mode").is_none() {
+        return Ok(Step::Ask(
+            Prompt::new(
+                "layer_mode",
+                LAYER_MODE.message_id,
+                Accept::keywords([
+                    KeywordOption::new("source", OPTION_SOURCE.message_id),
+                    KeywordOption::new("current", OPTION_CURRENT.message_id),
+                ]),
+            )
+            .with_default(PromptInput::Keyword("source".to_owned())),
+        ));
+    }
+    if keyword_at(state, "distance", "multiple") && state.answer("repeat").is_none() {
+        return Ok(Step::Ask(Prompt::new(
+            "repeat",
+            REPEAT.message_id,
+            super::count_accept(),
+        )));
+    }
+    let through_chosen = keyword_at(state, "distance", "through");
     if through_chosen {
         let Some(through) = point_answer(state, "through") else {
             return Ok(Step::Ask(Prompt::new(
@@ -199,7 +311,11 @@ fn next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     else {
         return Ok(Step::Ask(
             Prompt::new("distance", DISTANCE.message_id, Accept::distance()).or(Accept::keywords(
-                [KeywordOption::new("through", OPTION_THROUGH.message_id)],
+                [
+                    KeywordOption::new("through", OPTION_THROUGH.message_id),
+                    KeywordOption::new("layer", OPTION_LAYER.message_id),
+                    KeywordOption::new("multiple", OPTION_MULTIPLE.message_id),
+                ],
             )),
         ));
     };
@@ -216,6 +332,14 @@ fn objects_then(state: &PromptState<'_>, mut params: serde_json::Value) -> arc_b
         )));
     };
     params["objects"] = serde_json::json!(objects);
+    let layer = if keyword_at(state, "layer_mode", "current") {
+        "current"
+    } else {
+        "source"
+    };
+    params["layer"] = serde_json::json!(layer);
+    let repeat = super::count_answer(state, "repeat").unwrap_or(1);
+    params["repeat"] = serde_json::json!(repeat);
     if params.get("through").is_some() {
         return done(params);
     }
@@ -231,12 +355,12 @@ fn objects_then(state: &PromptState<'_>, mut params: serde_json::Value) -> arc_b
 }
 
 fn check(_: &PromptState<'_>, _: &Prompt, input: &PromptInput) -> arc_base::Result<()> {
-    if let PromptInput::Distance(m) = input
-        && !(m.is_finite() && *m > 0.0)
-    {
-        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "distance"));
+    match input {
+        PromptInput::Distance(m) if !(m.is_finite() && *m > 0.0) => {
+            Err(Error::new(codes::VALUE_INVALID).with_detail("field", "distance"))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// The commands of the family.

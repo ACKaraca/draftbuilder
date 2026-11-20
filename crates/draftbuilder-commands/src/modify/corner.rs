@@ -60,6 +60,20 @@ pub struct FilletParams {
     /// Whether the inputs are trimmed or extended to the joint.
     #[serde(default = "yes")]
     pub trim: bool,
+    /// Further corners filleted in turn after `first` and `second`, with the same radius and trim (multiple mode).
+    #[serde(default)]
+    #[schemars(length(max = 10000))]
+    pub more: Vec<CornerPair>,
+}
+
+/// One further corner of a multiple fillet: two entities and the point that picks the part kept of each.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CornerPair {
+    /// The first entity of the corner.
+    pub first: CornerPick,
+    /// The second entity of the corner.
+    pub second: CornerPick,
 }
 
 /// The size of a chamfer: two distances, or a distance and an angle.
@@ -221,10 +235,39 @@ fn fillet_run(ctx: &mut Context<'_>, p: FilletParams) -> Result<Corners> {
         p.first.ok_or_else(|| Error::new(codes::PARAMS_CONFLICT))?,
         p.second.ok_or_else(|| Error::new(codes::PARAMS_CONFLICT))?,
     );
+    let limit = usize::try_from(ctx.limits().array_length).unwrap_or(usize::MAX);
+    if p.more.len() >= limit {
+        return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
+    }
+    // Multiple mode: each further corner is filleted in turn, on the drawing the earlier ones left.
+    let mut objects = fillet_pair(ctx, first, second, p.radius, p.trim)?;
+    for pair in &p.more {
+        pair_check(&Some(pair.first), &Some(pair.second), &None)?;
+        objects.extend(fillet_pair(ctx, pair.first, pair.second, p.radius, p.trim)?);
+    }
+    ctx.set_selection(objects.clone())?;
+    Ok(Corners {
+        objects: objects.into_iter().map(IdParam).collect(),
+        skipped: Vec::new(),
+    })
+}
+
+/// Fillets one corner: the two entities are trimmed to the joint, or only the joint is made when `trim` is off.
+/// The entities are read from the drawing as it is now, so a corner may use an entity an earlier one changed.
+fn fillet_pair(
+    ctx: &mut Context<'_>,
+    first: CornerPick,
+    second: CornerPick,
+    radius: f64,
+    trim: bool,
+) -> Result<Vec<ObjectId>> {
+    if !first.pick.iter().chain(&second.pick).all(|v| v.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "pick"));
+    }
     let snapshot = ctx.snapshot().clone();
     let a = super::required_curve(&snapshot, first.object.0)?;
     let b = super::required_curve(&snapshot, second.object.0)?;
-    if p.trim {
+    if trim {
         refuse_locked(&snapshot, &[first.object.0, second.object.0])?;
     }
     let result = arc_geom::fillet(
@@ -232,23 +275,18 @@ fn fillet_run(ctx: &mut Context<'_>, p: FilletParams) -> Result<Corners> {
         Point2::new(first.pick[0], first.pick[1]),
         &b,
         Point2::new(second.pick[0], second.pick[1]),
-        p.radius,
-        mode(p.trim),
+        radius,
+        mode(trim),
         &Tolerance::DEFAULT,
     )?;
-    let objects = apply(
+    apply(
         ctx,
         first,
         second,
         result.joint,
         result.first,
         result.second,
-    )?;
-    ctx.set_selection(objects.clone())?;
-    Ok(Corners {
-        objects: objects.into_iter().map(IdParam).collect(),
-        skipped: Vec::new(),
-    })
+    )
 }
 
 fn chamfer_run(ctx: &mut Context<'_>, p: ChamferParams) -> Result<Corners> {
@@ -335,6 +373,12 @@ fn skipped(list: &[arc_geom::SkippedVertex]) -> Vec<Skipped> {
 /// The type key a polyline pick accepts.
 const POLYLINE_TYPE: &str = arc_draft::types::POLYLINE;
 
+const OPTION_MULTIPLE: Message = Message {
+    message_id: "db-cmd-modify-option-multiple",
+};
+const OPTION_END: Message = Message {
+    message_id: "db-cmd-modify-option-end",
+};
 const FIRST: Message = Message {
     message_id: "db-cmd-modify-corner-first",
 };
@@ -389,17 +433,24 @@ fn corner_next(state: &PromptState<'_>, chamfer: bool) -> arc_base::Result<Step>
     if polyline_mode {
         return polyline_corner(state, chamfer, trim);
     }
+    if !chamfer && keyword_on(state, "first", "multiple") {
+        return fillet_multi_next(state, trim);
+    }
     if !has_pick(state, "first") {
+        let mut options = vec![
+            KeywordOption::new("polyline", OPTION_POLYLINE.message_id),
+            KeywordOption::new("notrim", OPTION_NOTRIM.message_id),
+        ];
+        if !chamfer {
+            options.push(KeywordOption::new("multiple", OPTION_MULTIPLE.message_id));
+        }
         return Ok(Step::Ask(
             Prompt::new(
                 "first",
                 FIRST.message_id,
                 Accept::Pick { types: Vec::new() },
             )
-            .or(Accept::keywords([
-                KeywordOption::new("polyline", OPTION_POLYLINE.message_id),
-                KeywordOption::new("notrim", OPTION_NOTRIM.message_id),
-            ])),
+            .or(Accept::keywords(options)),
         ));
     }
     if state.answer("first_pick").is_none() {
@@ -529,6 +580,134 @@ fn point_of(state: &PromptState<'_>, key: &str) -> [f64; 2] {
 /// The distance of the answer `key` in drawing units.
 fn distance_of(state: &PromptState<'_>, key: &str) -> Option<f64> {
     distance_answer(state, key)
+}
+
+/// Whether the keyword `word` was answered for the prompt `key`.
+fn keyword_on(state: &PromptState<'_>, key: &str, word: &str) -> bool {
+    state
+        .answers
+        .iter()
+        .any(|a| a.key == key && matches!(&a.input, PromptInput::Keyword(k) if k == word))
+}
+
+/// A corner pair: the first entity and its pick, the second entity and its pick (drawing units).
+type CornerAnswer = (String, [f64; 2], String, [f64; 2]);
+
+/// The entity and pick answered so far for a corner pair that is not complete.
+#[derive(Default)]
+struct PartialCorner {
+    first: Option<String>,
+    first_pick: Option<[f64; 2]>,
+    second: Option<String>,
+}
+
+/// The complete corner pairs answered in multiple mode, in order, and the pair in progress.
+fn corner_pairs(state: &PromptState<'_>) -> (Vec<CornerAnswer>, PartialCorner) {
+    let mut pairs = Vec::new();
+    let mut partial = PartialCorner::default();
+    for answer in state.answers {
+        match (answer.key.as_str(), &answer.input) {
+            ("first", PromptInput::Pick(id)) => {
+                partial = PartialCorner {
+                    first: Some(id.to_string()),
+                    ..PartialCorner::default()
+                };
+            }
+            ("first_pick", PromptInput::Point(p)) => {
+                let q = crate::draw::create::drawing_point(state.snapshot, *p);
+                partial.first_pick = Some([q.x, q.y]);
+            }
+            ("second", PromptInput::Pick(id)) => partial.second = Some(id.to_string()),
+            ("second_pick", PromptInput::Point(p)) => {
+                if let (Some(first), Some(first_pick), Some(second)) = (
+                    partial.first.clone(),
+                    partial.first_pick,
+                    partial.second.clone(),
+                ) {
+                    let q = crate::draw::create::drawing_point(state.snapshot, *p);
+                    pairs.push((first, first_pick, second, [q.x, q.y]));
+                    partial = PartialCorner::default();
+                }
+            }
+            _ => {}
+        }
+    }
+    (pairs, partial)
+}
+
+/// The prompts of multiple mode: a corner pair as the single form asks it, then the radius after the first pair,
+/// then the next pair, until `end` is answered at the first entity prompt.
+fn fillet_multi_next(state: &PromptState<'_>, trim: bool) -> arc_base::Result<Step> {
+    let (pairs, partial) = corner_pairs(state);
+    if partial.first.is_none() && pairs.is_empty() {
+        return Ok(Step::Ask(Prompt::new(
+            "first",
+            FIRST.message_id,
+            Accept::Pick { types: Vec::new() },
+        )));
+    }
+    if partial.first.is_some() && partial.first_pick.is_none() {
+        return Ok(Step::Ask(Prompt::new(
+            "first_pick",
+            FIRST_PICK.message_id,
+            point(),
+        )));
+    }
+    if partial.first.is_some() && partial.second.is_none() {
+        return Ok(Step::Ask(Prompt::new(
+            "second",
+            SECOND.message_id,
+            Accept::Pick { types: Vec::new() },
+        )));
+    }
+    if partial.first.is_some() {
+        return Ok(Step::Ask(Prompt::new(
+            "second_pick",
+            SECOND_PICK.message_id,
+            point(),
+        )));
+    }
+    let Some(radius) = distance_of(state, "radius") else {
+        return Ok(Step::Ask(Prompt::new(
+            "radius",
+            RADIUS.message_id,
+            Accept::distance(),
+        )));
+    };
+    let ended = state.answers.last().is_some_and(|a| {
+        a.key == "first" && matches!(&a.input, PromptInput::Keyword(k) if k == "end")
+    });
+    let corner = |object: &str, pick: [f64; 2]| serde_json::json!({"object": object, "pick": pick});
+    match pairs.first() {
+        Some((first, first_pick, second, second_pick)) if ended => {
+            let more: Vec<serde_json::Value> = pairs
+                .iter()
+                .skip(1)
+                .map(|(f, fp, s, sp)| {
+                    serde_json::json!({"first": corner(f, *fp), "second": corner(s, *sp)})
+                })
+                .collect();
+            done(serde_json::json!({
+                "first": corner(first, *first_pick),
+                "second": corner(second, *second_pick),
+                "more": more,
+                "radius": radius,
+                "trim": trim
+            }))
+        }
+        _ => Ok(Step::Ask(
+            Prompt::new(
+                "first",
+                FIRST.message_id,
+                Accept::Pick { types: Vec::new() },
+            )
+            .or(Accept::keywords([KeywordOption::new(
+                "end",
+                OPTION_END.message_id,
+            )]))
+            .with_default(PromptInput::Keyword("end".to_owned())),
+        )),
+    }
 }
 
 fn fillet_next(state: &PromptState<'_>) -> arc_base::Result<Step> {

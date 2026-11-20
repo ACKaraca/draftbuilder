@@ -31,7 +31,10 @@ use arc_geom::{Circle2, Curve2, CurveEnd, CurveProject, Line2};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{entities, replace_with_pieces, selection_answer};
+use super::{
+    entities, entity_selection, erase_entities, refuse_locked, replace_with_pieces,
+    selection_answer,
+};
 use crate::draw::create::{done, machine};
 use crate::error::{Message, codes};
 use crate::select::{candidates::Options, methods};
@@ -53,6 +56,8 @@ pub struct Edited {
     pub objects: Vec<IdParam>,
     /// The targets that could not be processed, in target order, with their reasons.
     pub skipped: Vec<Skipped>,
+    /// The entities erased by the erase option, in order.
+    pub erased: Vec<IdParam>,
 }
 
 /// One target of a trim or an extend: the entity and the point on the part to change.
@@ -79,6 +84,11 @@ pub struct EdgeParams {
     /// Whether the edges are first taken to their natural continuation.
     #[serde(default)]
     pub extend_edges: bool,
+    /// Entities erased by the same command (the erase option): they are not targets and are erased after the
+    /// targets are changed, in the same undo step.
+    #[serde(default)]
+    #[schemars(length(max = 10000))]
+    pub erase: Vec<IdParam>,
 }
 
 const TRIM_LABEL: Message = Message {
@@ -107,6 +117,12 @@ const OPTION_EXTEND: Message = Message {
 };
 const OPTION_END: Message = Message {
     message_id: "db-cmd-modify-option-end",
+};
+const OPTION_ERASE: Message = Message {
+    message_id: "db-cmd-modify-option-erase",
+};
+const ERASE_OBJECTS: Message = Message {
+    message_id: "db-cmd-modify-erase-objects",
 };
 
 /// The natural continuation of a curve, as the edges of an `extend_edges` trim or extend.
@@ -229,6 +245,7 @@ fn extend_one(
 fn edit_targets(ctx: &mut Context<'_>, p: EdgeParams, extend: bool) -> Result<Edited> {
     let edges = edge_ids(ctx, &p)?;
     let targets = target_ids(ctx, &p)?;
+    let erased = erase_ids(ctx, &p, &targets)?;
     let quick = p.edges.is_empty();
     let start = ctx.snapshot().clone();
     let edge_sets = edge_curves(&start, &edges, quick, p.extend_edges)?;
@@ -268,11 +285,38 @@ fn edit_targets(ctx: &mut Context<'_>, p: EdgeParams, extend: bool) -> Result<Ed
             Error::new(codes::PARAMS_CONFLICT).with_detail("field", "targets")
         }));
     }
+    if !erased.is_empty() {
+        erase_entities(ctx, &erased)?;
+    }
     ctx.set_selection(objects.clone())?;
     Ok(Edited {
         objects: objects.into_iter().map(IdParam).collect(),
         skipped,
+        erased: erased.into_iter().map(IdParam).collect(),
     })
+}
+
+/// The entities the erase option erases: each once, on unlocked layers, and never a target (a target is
+/// changed, not erased).
+///
+/// # Errors
+///
+/// `draft.object.wrong_type` for an identifier that names no entity, `draft.layer.locked`, and
+/// `db.cmd.params_conflict` (field `erase`) for a target that is also erased.
+fn erase_ids(
+    ctx: &Context<'_>,
+    p: &EdgeParams,
+    targets: &[(ObjectId, Point2)],
+) -> Result<Vec<ObjectId>> {
+    if p.erase.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = entities(ctx.snapshot(), ctx.limits(), &p.erase)?;
+    if ids.iter().any(|id| targets.iter().any(|(t, _)| t == id)) {
+        return Err(Error::new(codes::PARAMS_CONFLICT).with_detail("field", "erase"));
+    }
+    refuse_locked(ctx.snapshot(), &ids)?;
+    Ok(ids)
 }
 
 fn trim_run(ctx: &mut Context<'_>, p: EdgeParams) -> Result<Edited> {
@@ -342,12 +386,22 @@ fn edge_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
             super::point(),
         )));
     }
-    let ended = state.answers.last().is_some_and(|a| {
-        a.key == "target" && matches!(&a.input, PromptInput::Keyword(k) if k == "end")
-    });
-    if ended && !targets.is_empty() {
+    let last_is = |keyword: &str| {
+        state.answers.last().is_some_and(|a| {
+            a.key == "target" && matches!(&a.input, PromptInput::Keyword(k) if k == keyword)
+        })
+    };
+    if last_is("erase") {
+        return Ok(Step::Ask(Prompt::new(
+            "erase_objects",
+            ERASE_OBJECTS.message_id,
+            entity_selection(),
+        )));
+    }
+    let erase = erase_so_far(state);
+    if last_is("end") && !targets.is_empty() {
         return done(serde_json::json!({
-            "edges": edges, "targets": targets, "extend_edges": extend_edges
+            "edges": edges, "targets": targets, "extend_edges": extend_edges, "erase": erase
         }));
     }
     let mut prompt = Prompt::new(
@@ -357,14 +411,28 @@ fn edge_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
             types: ENTITIES.iter().map(|k| (*k).to_owned()).collect(),
         },
     )
-    .or(Accept::keywords([KeywordOption::new(
-        "end",
-        OPTION_END.message_id,
-    )]));
+    .or(Accept::keywords([
+        KeywordOption::new("end", OPTION_END.message_id),
+        KeywordOption::new("erase", OPTION_ERASE.message_id),
+    ]));
     if !targets.is_empty() {
         prompt = prompt.with_default(PromptInput::Keyword("end".to_owned()));
     }
     Ok(Step::Ask(prompt))
+}
+
+/// The entities chosen for the erase option so far, as identifier texts in order.
+fn erase_so_far(state: &PromptState<'_>) -> Vec<String> {
+    state
+        .answers
+        .iter()
+        .filter(|a| a.key == "erase_objects")
+        .filter_map(|a| match &a.input {
+            PromptInput::Selection(ids) => Some(ids.iter().map(ToString::to_string)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 /// Refuses an `end` before any target, so the prompt never finishes with nothing to change.

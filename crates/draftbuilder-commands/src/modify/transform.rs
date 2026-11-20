@@ -151,8 +151,8 @@ pub struct MoveParams {
 }
 
 /// Parameters of `draftbuilder.modify.copy`: copies of the entities, each displaced by the vector
-/// from `base` to one target point. The objects times the targets must fit the session's array-length
-/// limit, and every point must be finite; both are checked before the first copy.
+/// from `base` to one target point, or an array of a set count of copies. The objects times the copies must
+/// fit the session's array-length limit, and every point must be finite; both are checked before the first copy.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CopyParams {
@@ -161,9 +161,28 @@ pub struct CopyParams {
     pub objects: Vec<IdParam>,
     /// The base point, in drawing units.
     pub base: [f64; 2],
-    /// The target points, in drawing units: one copy of every object for each, in order.
-    #[schemars(length(min = 1, max = 10000))]
+    /// The target points, in drawing units: one copy of every object for each, in order. Give these or `array`.
+    #[serde(default)]
+    #[schemars(length(max = 10000))]
     pub targets: Vec<[f64; 2]>,
+    /// An array of copies instead of targets.
+    #[serde(default)]
+    pub array: Option<CopyArray>,
+}
+
+/// An array of copies: `count` copies of every object, spaced by the vector from the base point to `second`
+/// (copy k is displaced by k times that vector), or fitted so that the last copy lands on `second` (copy k is
+/// displaced by k over `count` times that vector).
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CopyArray {
+    /// The second point, in drawing units.
+    pub second: [f64; 2],
+    /// The number of copies of each object, at least one.
+    pub count: u32,
+    /// Whether the copies are fitted between the base point and `second`, instead of spaced by it.
+    #[serde(default)]
+    pub fitted: bool,
 }
 
 /// Parameters of `draftbuilder.modify.rotate`: a rotation by an angle, or by the change from a
@@ -311,6 +330,9 @@ const REFERENCE_TO: Message = Message {
 const FACTOR: Message = Message {
     message_id: "db-cmd-modify-factor",
 };
+const REFERENCE_SECOND: Message = Message {
+    message_id: "db-cmd-modify-reference-second",
+};
 const REFERENCE_LENGTH: Message = Message {
     message_id: "db-cmd-modify-reference-length",
 };
@@ -343,6 +365,24 @@ const OPTION_SCALE: Message = Message {
 };
 const OPTION_END: Message = Message {
     message_id: "db-cmd-modify-option-end",
+};
+const OPTION_ARRAY: Message = Message {
+    message_id: "db-cmd-modify-option-array",
+};
+const OPTION_SPACED: Message = Message {
+    message_id: "db-cmd-modify-option-spaced",
+};
+const OPTION_FITTED: Message = Message {
+    message_id: "db-cmd-modify-option-fitted",
+};
+const COUNT: Message = Message {
+    message_id: "db-cmd-modify-count",
+};
+const ARRAY_SECOND: Message = Message {
+    message_id: "db-cmd-modify-array-second",
+};
+const ARRAY_FIT: Message = Message {
+    message_id: "db-cmd-modify-array-fit",
 };
 const OPTION_SINGLE: Message = Message {
     message_id: "db-cmd-modify-option-single",
@@ -440,6 +480,9 @@ fn copy_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     let Some(base) = point_answer(state, "base") else {
         return Ok(Step::Ask(Prompt::new("base", BASE.message_id, point())));
     };
+    if reference_keyword(state, "target", "array") {
+        return copy_array_next(state, objects, base);
+    }
     let targets: Vec<[f64; 2]> = state
         .answers
         .iter()
@@ -466,6 +509,7 @@ fn copy_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     }
     let mut prompt = Prompt::new("target", TARGET.message_id, point()).or(Accept::keywords([
         option("single", OPTION_SINGLE),
+        option("array", OPTION_ARRAY),
         option("end", OPTION_END),
     ]));
     if !targets.is_empty() {
@@ -474,7 +518,54 @@ fn copy_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     Ok(Step::Ask(prompt))
 }
 
-/// Refuses `end` or `single` before any target is given: a copy needs at least one.
+/// Whether the keyword `word` was answered for the prompt `key`.
+fn reference_keyword(state: &PromptState<'_>, key: &str, word: &str) -> bool {
+    state.answers.iter().any(|a| {
+        a.key == key && matches!(&a.input, arc_command::PromptInput::Keyword(k) if k == word)
+    })
+}
+
+/// The array form of copy: the count, the second point, then spaced or fitted (spaced by default).
+fn copy_array_next(
+    state: &PromptState<'_>,
+    objects: serde_json::Value,
+    base: [f64; 2],
+) -> arc_base::Result<Step> {
+    let Some(count) = super::count_answer(state, "count") else {
+        return Ok(Step::Ask(Prompt::new(
+            "count",
+            COUNT.message_id,
+            super::count_accept(),
+        )));
+    };
+    let Some(second) = point_answer(state, "array_second") else {
+        return Ok(Step::Ask(Prompt::new(
+            "array_second",
+            ARRAY_SECOND.message_id,
+            point(),
+        )));
+    };
+    let fitted = reference_keyword(state, "array_fit", "fitted");
+    if !fitted && !reference_keyword(state, "array_fit", "spaced") {
+        return Ok(Step::Ask(
+            Prompt::new(
+                "array_fit",
+                ARRAY_FIT.message_id,
+                Accept::keywords([
+                    option("spaced", OPTION_SPACED),
+                    option("fitted", OPTION_FITTED),
+                ]),
+            )
+            .with_default(arc_command::PromptInput::Keyword("spaced".to_owned())),
+        ));
+    }
+    done(serde_json::json!({
+        "objects": objects, "base": base,
+        "array": {"second": second, "count": count, "fitted": fitted}
+    }))
+}
+
+/// Refuses an `end` or `single` before any target.
 fn copy_check(state: &PromptState<'_>, _: &Prompt, input: &arc_command::PromptInput) -> Result<()> {
     let ends = matches!(input, arc_command::PromptInput::Keyword(k) if k == "end" || k == "single");
     let has_target = state
@@ -487,29 +578,79 @@ fn copy_check(state: &PromptState<'_>, _: &Prompt, input: &arc_command::PromptIn
     Ok(())
 }
 
+/// The displacements of an array of copies: copy `k` (from one) is `k` times the spacing, the spacing being
+/// the base-to-second vector (spaced) or that vector over `count` (fitted). The copies of every object must fit
+/// the array-length limit, which is checked before any displacement is made.
+fn array_displacements(
+    base: [f64; 2],
+    array: CopyArray,
+    objects: usize,
+    limit: usize,
+) -> Result<Vec<[f64; 2]>> {
+    if array.count == 0 {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "count"));
+    }
+    let count = usize::try_from(array.count).unwrap_or(usize::MAX);
+    if objects
+        .checked_mul(count)
+        .is_none_or(|copies| copies > limit)
+    {
+        return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
+    }
+    if !array.second.iter().all(|v| v.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "second"));
+    }
+    let (dx, dy) = (array.second[0] - base[0], array.second[1] - base[1]);
+    if dx.hypot(dy) <= Tolerance::DEFAULT.linear {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "second"));
+    }
+    let divisor = if array.fitted {
+        f64::from(array.count)
+    } else {
+        1.0
+    };
+    let (sx, sy) = (dx / divisor, dy / divisor);
+    Ok((1..=count)
+        .map(|k| [sx * k as f64, sy * k as f64])
+        .collect())
+}
+
 fn copy_run(ctx: &mut Context<'_>, p: CopyParams) -> Result<Changed> {
     // Everything is checked before the first copy: the points are finite, and the copies (objects times
-    // targets) stay within the session's array-length limit.
+    // targets or times the array count) stay within the session's array-length limit.
     if !p.base.iter().all(|v| v.is_finite()) || !p.targets.iter().flatten().all(|v| v.is_finite()) {
         return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "targets"));
     }
     let ids = entities(ctx.snapshot(), ctx.limits(), &p.objects)?;
     let limit = usize::try_from(ctx.limits().array_length).unwrap_or(usize::MAX);
+    let displacements: Vec<[f64; 2]> = match p.array {
+        Some(array) => {
+            if !p.targets.is_empty() {
+                return Err(Error::new(codes::PARAMS_CONFLICT).with_detail("field", "targets"));
+            }
+            array_displacements(p.base, array, ids.len(), limit)?
+        }
+        None => {
+            if p.targets.is_empty() {
+                return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "targets"));
+            }
+            p.targets
+                .iter()
+                .map(|t| [t[0] - p.base[0], t[1] - p.base[1]])
+                .collect()
+        }
+    };
     if ids
         .len()
-        .checked_mul(p.targets.len())
+        .checked_mul(displacements.len())
         .is_none_or(|copies| copies > limit)
     {
         return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
     }
     let mut out = Vec::new();
-    for target in &p.targets {
+    for displacement in displacements {
         let copies = copy_entities(ctx, &ids)?;
-        transform_entities(
-            ctx,
-            &copies,
-            translation(target[0] - p.base[0], target[1] - p.base[1]),
-        )?;
+        transform_entities(ctx, &copies, translation(displacement[0], displacement[1]))?;
         out.extend(copies);
     }
     ctx.set_selection(out.clone())?;
@@ -517,6 +658,33 @@ fn copy_run(ctx: &mut Context<'_>, p: CopyParams) -> Result<Changed> {
 }
 
 // ----- rotate -----------------------------------------------------------------------------------
+
+/// A reference angle of the rotate prompt: a typed angle, or the direction from `base` to a picked point.
+fn reference_angle(state: &PromptState<'_>, key: &str, base: [f64; 2]) -> Option<f64> {
+    match state.answer(key)? {
+        arc_command::PromptInput::Angle(radians) => Some(*radians),
+        arc_command::PromptInput::Point(p) => {
+            let q = drawing_point(state.snapshot, *p);
+            Some((q.y - base[1]).atan2(q.x - base[0]))
+        }
+        _ => None,
+    }
+}
+
+/// Refuses a picked reference point that is the base point itself: it gives no direction.
+fn reference_check(
+    state: &PromptState<'_>,
+    prompt: &Prompt,
+    input: &arc_command::PromptInput,
+) -> Result<()> {
+    if let (arc_command::PromptInput::Point(p), Some(base)) = (input, point_answer(state, "base")) {
+        let q = drawing_point(state.snapshot, *p);
+        if (q.x - base[0]).hypot(q.y - base[1]) <= Tolerance::DEFAULT.linear {
+            return Err(Error::new(codes::VALUE_INVALID).with_detail("field", prompt.key.clone()));
+        }
+    }
+    Ok(())
+}
 
 fn rotate_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     let Some(objects) = objects_json(state) else {
@@ -527,19 +695,16 @@ fn rotate_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     };
     let copy = copy_toggled(state, "angle");
     if reference_asked(state, "angle") {
-        let Some(from) = angle_answer(state, "reference_from") else {
-            return Ok(Step::Ask(Prompt::new(
-                "reference_from",
-                REFERENCE_FROM.message_id,
-                Accept::angle(),
-            )));
+        let Some(from) = reference_angle(state, "reference_from", base) else {
+            return Ok(Step::Ask(
+                Prompt::new("reference_from", REFERENCE_FROM.message_id, Accept::angle())
+                    .or(point()),
+            ));
         };
-        let Some(to) = angle_answer(state, "reference_to") else {
-            return Ok(Step::Ask(Prompt::new(
-                "reference_to",
-                REFERENCE_TO.message_id,
-                Accept::angle(),
-            )));
+        let Some(to) = reference_angle(state, "reference_to", base) else {
+            return Ok(Step::Ask(
+                Prompt::new("reference_to", REFERENCE_TO.message_id, Accept::angle()).or(point()),
+            ));
         };
         return done(serde_json::json!({
             "objects": objects, "base": base, "copy": copy,
@@ -588,19 +753,48 @@ fn scale_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
     };
     let copy = copy_toggled(state, "factor");
     if reference_asked(state, "factor") {
-        let Some(from) = distance_answer(state, "reference_length") else {
-            return Ok(Step::Ask(Prompt::new(
-                "reference_length",
-                REFERENCE_LENGTH.message_id,
-                Accept::distance(),
-            )));
+        // The reference length is a typed distance, or the distance between two picked points; the new length
+        // is a typed distance, or the distance from the base to a picked point.
+        let from = match state.answer("reference_length") {
+            Some(arc_command::PromptInput::Point(p)) => {
+                let Some(second) = point_answer(state, "reference_second") else {
+                    return Ok(Step::Ask(Prompt::new(
+                        "reference_second",
+                        REFERENCE_SECOND.message_id,
+                        point(),
+                    )));
+                };
+                let first = drawing_point(state.snapshot, *p);
+                (second[0] - first.x).hypot(second[1] - first.y)
+            }
+            _ => match distance_answer(state, "reference_length") {
+                Some(length) => length,
+                None => {
+                    return Ok(Step::Ask(
+                        Prompt::new(
+                            "reference_length",
+                            REFERENCE_LENGTH.message_id,
+                            Accept::distance(),
+                        )
+                        .or(point()),
+                    ));
+                }
+            },
         };
-        let Some(to) = distance_answer(state, "new_length") else {
-            return Ok(Step::Ask(Prompt::new(
-                "new_length",
-                NEW_LENGTH.message_id,
-                Accept::distance(),
-            )));
+        let to = match state.answer("new_length") {
+            Some(arc_command::PromptInput::Point(p)) => {
+                let q = drawing_point(state.snapshot, *p);
+                (q.x - base[0]).hypot(q.y - base[1])
+            }
+            _ => match distance_answer(state, "new_length") {
+                Some(length) => length,
+                None => {
+                    return Ok(Step::Ask(
+                        Prompt::new("new_length", NEW_LENGTH.message_id, Accept::distance())
+                            .or(point()),
+                    ));
+                }
+            },
         };
         return done(serde_json::json!({
             "objects": objects, "base": base, "copy": copy,
@@ -623,14 +817,28 @@ fn scale_next(state: &PromptState<'_>) -> arc_base::Result<Step> {
 }
 
 fn scale_check(
-    _: &PromptState<'_>,
-    _: &Prompt,
+    state: &PromptState<'_>,
+    prompt: &Prompt,
     input: &arc_command::PromptInput,
 ) -> arc_base::Result<()> {
     match input {
         arc_command::PromptInput::Number(q) if !(q.value().is_finite() && q.value() > 0.0) => {
             Err(Error::new(codes::VALUE_INVALID).with_detail("field", "factor"))
         }
+        // A reference length of zero or a new length from the base point itself gives no scale.
+        arc_command::PromptInput::Point(p) if prompt.key == "reference_second" => {
+            if let Some(arc_command::PromptInput::Point(a)) = state.answer("reference_length") {
+                let a = drawing_point(state.snapshot, *a);
+                let q = drawing_point(state.snapshot, *p);
+                if (q.x - a.x).hypot(q.y - a.y) <= Tolerance::DEFAULT.linear {
+                    return Err(
+                        Error::new(codes::VALUE_INVALID).with_detail("field", "reference_second")
+                    );
+                }
+            }
+            Ok(())
+        }
+        arc_command::PromptInput::Point(_) => reference_check(state, prompt, input),
         _ => Ok(()),
     }
 }
@@ -867,7 +1075,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             ROTATE_DESCRIPTION,
             rotate_run,
         )
-        .with_prompt(machine(rotate_next, crate::draw::create::accept_all)),
+        .with_prompt(machine(rotate_next, reference_check)),
         super::spec(
             "draftbuilder.modify.scale",
             SCALE_LABEL,
