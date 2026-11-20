@@ -19,7 +19,6 @@ use draftbuilder_commands::script;
 use serde_json::Value;
 
 const W01: &str = include_str!("data/w01.scr");
-const W01_NO_ARRAY: &str = include_str!("data/w01_no_array.scr");
 const TEMPLATE: &[u8] = include_bytes!("data/team_metric_template.dxf");
 
 /// The CLI with `args`.
@@ -66,11 +65,7 @@ fn script_runs_the_workflow_writes_the_report_and_saves_the_package() {
     let output = dir.path("out.dxf");
     let script_path = dir.write(
         "w01.scr",
-        fill(
-            W01_NO_ARRAY,
-            &[("template", &template), ("output", &output)],
-        )
-        .as_bytes(),
+        fill(W01, &[("template", &template), ("output", &output)]).as_bytes(),
     );
     let package = dir.path("part.draftb");
     let report_path = dir.path("report.json");
@@ -94,7 +89,7 @@ fn script_runs_the_workflow_writes_the_report_and_saves_the_package() {
     assert!(stdout["failure"].is_null());
     assert_eq!(
         stdout["totals"]["commands"], 20,
-        "the array-free workflow completes twenty commands, the save among them"
+        "the workflow completes twenty commands, the save among them"
     );
     assert_eq!(stdout["reports"][0]["command"], "draftbuilder.drawing.save");
     assert_eq!(stdout["reports"][0]["report"]["header"]["format"], "dxf");
@@ -112,7 +107,8 @@ fn script_runs_the_workflow_writes_the_report_and_saves_the_package() {
 fn script_stops_at_the_failing_line_and_exits_with_the_error_category() {
     let dir = Harness::new();
     let template = dir.write("team_metric_template.dxf", TEMPLATE);
-    let output = dir.path("out.dxf");
+    // The save targets a DWG file, which the product cannot write yet: the last line fails.
+    let output = dir.path("out.dwg");
     let text = fill(W01, &[("template", &template), ("output", &output)]);
     let script_path = dir.write("w01.scr", text.as_bytes());
     let last = script::lines(&text).last().unwrap().number;
@@ -132,17 +128,14 @@ fn script_stops_at_the_failing_line_and_exits_with_the_error_category() {
     assert_eq!(
         run.status.code(),
         Some(4),
-        "unsupported: the array cannot be saved"
+        "unsupported: a DWG target cannot be saved yet"
     );
     let error = last_error(&run);
-    assert_eq!(
-        error["error"]["data"]["code"],
-        "db.cmd.export_drops_objects"
-    );
+    assert_eq!(error["error"]["data"]["code"], "db.cmd.format_unsupported");
     assert_eq!(error["error"]["data"]["details"]["line"], last.to_string());
     let stdout: Value = serde_json::from_slice(&run.stdout).unwrap();
     assert_eq!(stdout["failure"]["line"], last);
-    assert_eq!(stdout["failure"]["code"], "db.cmd.export_drops_objects");
+    assert_eq!(stdout["failure"]["code"], "db.cmd.format_unsupported");
     assert!(!output.exists(), "nothing is written");
     assert!(
         !Path::new(&package).exists(),
@@ -174,11 +167,7 @@ fn script_edits_need_the_edit_permission_of_the_flags() {
     let output = dir.path("out.dxf");
     let script_path = dir.write(
         "w01.scr",
-        fill(
-            W01_NO_ARRAY,
-            &[("template", &template), ("output", &output)],
-        )
-        .as_bytes(),
+        fill(W01, &[("template", &template), ("output", &output)]).as_bytes(),
     );
     let package = dir.path("part.draftb");
     let root = dir.dir.to_str().unwrap().to_owned();

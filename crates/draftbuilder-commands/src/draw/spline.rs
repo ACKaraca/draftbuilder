@@ -10,9 +10,8 @@ use arc_base::math::Point2;
 use arc_command::{
     Accept, CommandSpec, Context, KeywordOption, PointDims, Prompt, PromptInput, PromptState, Step,
 };
-use arc_doc::Value;
-use arc_draft::types::{self, entity};
-use arc_geom::{Curve2, Nurbs2};
+use arc_draft::types;
+use arc_geom::Nurbs2;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -124,18 +123,7 @@ fn run(ctx: &mut Context<'_>, p: SplineParams) -> Result<Created> {
     let points: Vec<Point2> = p.points.iter().map(|q| Point2::new(q[0], q[1])).collect();
     let (nurbs, fit) = curve(&points, degree, p.control)?;
     let mut creator = Creator::new(ctx.snapshot())?;
-    let fields = vec![
-        (
-            entity::KIND,
-            Value::Geometry(arc_doc::GeometryBytes(
-                arc_geom::encoding::GeomCodec::encode(&Curve2::Nurbs(nurbs)),
-            )),
-        ),
-        (
-            entity::SPLINE_FIT_POINTS,
-            Value::List(fit.into_iter().map(Value::Point2).collect()),
-        ),
-    ];
+    let fields = arc_draft::spline::values(&nurbs, &fit);
     creator.add(ctx, types::SPLINE, fields)?;
     Ok(creator.finish(ctx))
 }

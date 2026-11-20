@@ -120,6 +120,9 @@ pub struct SaveResult {
     pub fingerprint: String,
     /// The loss and preservation report.
     pub report: serde_json::Value,
+    /// The arrays written as block references: each item is a reference, and the counts, spacings,
+    /// angles and paths of the array are not written.
+    pub arrays_as_references: u64,
     /// Warnings about a save that completed: the file is in place, but a step after the replace (the
     /// directory sync on Unix) failed.
     pub warnings: Vec<String>,
@@ -251,17 +254,32 @@ const PRODUCT_KINDS: &[&str] = &[
     arc_draft::types::POLYLINE,
     arc_draft::types::SPLINE,
     arc_draft::types::BLOCK_REF,
+    // An array is written as block references and reported as approximated, which the check
+    // skips. The export drops an array it cannot place (a path it cannot read, or more items than an
+    // array may hold); that drop refuses the save.
     arc_draft::array::ARRAY,
 ];
 
+/// The number of arrays the report says were written as block references.
+fn report_arrays(value: &serde_json::Value) -> u64 {
+    let count = value["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item["record_kind"] == arc_draft::array::ARRAY && item["outcome"] == "approximated"
+        })
+        .count();
+    u64::try_from(count).unwrap_or(u64::MAX)
+}
+
 /// Fails with `db.cmd.export_drops_objects` when the export report drops objects of a kind the product
-/// creates: the detail `kind` names the first such kind and `count` the number dropped in all.
-fn refuse_dropped(report: &arc_io_dxf::loss::LossReport) -> Result<()> {
-    let value = serde_json::to_value(report)
-        .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?;
+/// creates: the detail `kind` names the first such kind and `count` the number dropped in all. The
+/// report is the serialized loss report of the export.
+fn refuse_dropped(report: &serde_json::Value) -> Result<()> {
     let mut first: Option<String> = None;
     let mut count = 0_u64;
-    for item in value["items"].as_array().into_iter().flatten() {
+    for item in report["items"].as_array().into_iter().flatten() {
         let kind = item["record_kind"].as_str().unwrap_or_default();
         if item["outcome"] != "dropped" || !PRODUCT_KINDS.contains(&kind) {
             continue;
@@ -317,7 +335,10 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
     let mut exported = export(&snapshot, space, &request)?;
     // The drawing's settings replace the header values the export wrote under the same names.
     for variable in crate::settings::header::header_values(&snapshot) {
-        exported.drawing.header.retain(|h| h.name != variable.name);
+        exported
+            .drawing
+            .header
+            .retain(|h| !h.name.eq_ignore_ascii_case(&variable.name));
         exported.drawing.header.push(variable);
     }
     ctx.progress(0.5, SAVE_PROGRESS.message_id);
@@ -335,7 +356,10 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         arc_io_dxf::write(&exported.drawing, &mut options)?
     };
     ctx.checkpoint()?;
-    refuse_dropped(&exported.report)?;
+    refuse_dropped(
+        &serde_json::to_value(&exported.report)
+            .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
+    )?;
     let warnings = write_atomic(ctx, Path::new(&p.path), &output.bytes)?;
     // The file is written: record the handles it now holds for objects that had none.
     let new: Vec<_> = exported
@@ -352,6 +376,10 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
     }
     let mut report = exported.report;
     merge(&mut report, &output.report);
+    let arrays_as_references = report_arrays(
+        &serde_json::to_value(&report)
+            .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
+    );
     Ok(SaveResult {
         bytes: u64::try_from(output.bytes.len()).unwrap_or(u64::MAX),
         entities: exported.entities,
@@ -362,6 +390,7 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
             new.len() as u64
         },
         fingerprint: fingerprint.to_braced(),
+        arrays_as_references,
         warnings,
         report: serde_json::to_value(&report)
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
@@ -389,4 +418,53 @@ pub fn register(registry: &mut Registry) -> Result<()> {
         .with_undo(UndoBehavior::Undoable)
         .with_permissions([Permission::Read, Permission::Edit, Permission::FileWrite]),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::refuse_dropped;
+    use arc_base::error::Value;
+    use serde_json::json;
+
+    #[test]
+    fn a_dropped_product_kind_is_refused_with_its_count() {
+        let report = json!({"items": [
+            {"record_kind": "core.draft.array", "outcome": "approximated", "arguments": {"count": 4}},
+            {"record_kind": "core.draft.line", "outcome": "dropped", "arguments": {"count": 2}},
+            {"record_kind": "core.draft.circle", "outcome": "dropped"},
+            {"record_kind": "leader", "outcome": "dropped", "arguments": {"count": 9}},
+        ]});
+        let error = refuse_dropped(&report).unwrap_err();
+        assert_eq!(error.code(), "db.cmd.export_drops_objects");
+        assert_eq!(
+            error.details().get("kind"),
+            Some(&Value::from("core.draft.line"))
+        );
+        assert_eq!(error.details().get("count"), Some(&Value::from("3")));
+    }
+
+    #[test]
+    fn a_dropped_array_is_refused_and_an_approximated_one_is_not() {
+        let dropped = json!({"items": [
+            {"record_kind": "core.draft.array", "outcome": "dropped", "arguments": {"count": 3}},
+        ]});
+        let error = refuse_dropped(&dropped).unwrap_err();
+        assert_eq!(
+            error.details().get("kind"),
+            Some(&Value::from("core.draft.array"))
+        );
+        let approximated = json!({"items": [
+            {"record_kind": "core.draft.array", "outcome": "approximated", "arguments": {"count": 3}},
+        ]});
+        assert!(refuse_dropped(&approximated).is_ok());
+    }
+
+    #[test]
+    fn approximated_arrays_and_other_dropped_kinds_are_not_refused() {
+        let report = json!({"items": [
+            {"record_kind": "core.draft.array", "outcome": "approximated", "arguments": {"count": 4}},
+            {"record_kind": "leader", "outcome": "dropped", "arguments": {"count": 9}},
+        ]});
+        assert!(refuse_dropped(&report).is_ok());
+    }
 }

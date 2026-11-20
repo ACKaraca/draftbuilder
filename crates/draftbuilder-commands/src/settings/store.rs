@@ -1,10 +1,11 @@
 //! Where the values of settings are kept. A drawing-scoped value is a foreign row of the document
 //! (`record_kind` `setting`, the product name as `source_id`, the JSON form as `data`), so the
 //! transaction that writes it is undoable and the package saves it with the drawing. A
-//! session-scoped value is held in memory for the process.
+//! session-scoped value is kept in the session's settings of the foundation (`arc_command`), under
+//! the key [`session_key`]: each session has its own values, and a write applies when its command
+//! succeeds.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use arc_base::Result;
 use arc_doc::{Snapshot, StoredForeign, Txn};
@@ -15,8 +16,24 @@ use super::{Scope, Setting, TABLE, Value, default_value, find, parse_json};
 /// The `record_kind` of the setting rows of a drawing.
 pub const RECORD_KIND: &str = "setting";
 
-/// The session values, by product name.
-static SESSION: Mutex<BTreeMap<&'static str, Value>> = Mutex::new(BTreeMap::new());
+/// The namespace of the product's keys in the foundation's session settings.
+pub const SESSION_NAMESPACE: &str = "draftbuilder";
+
+/// A reader of the session settings: a command context's `setting`, or a session's.
+pub type SessionRead<'a> = &'a dyn Fn(&str) -> Option<serde_json::Value>;
+
+/// The key of the session setting `setting` in the foundation's session settings.
+#[must_use]
+pub fn session_key(setting: &Setting) -> String {
+    format!("{SESSION_NAMESPACE}.{}", setting.name)
+}
+
+/// The session value of `setting` that `read` gives, when the session has one that parses.
+#[must_use]
+pub fn session_value(read: SessionRead<'_>, setting: &Setting) -> Option<Value> {
+    let json = read(&session_key(setting))?;
+    parse_json(setting, &json).ok()
+}
 
 /// The stored row of the setting named `name` in `snapshot`: its identifier and its row.
 fn row_of(snapshot: &Snapshot, name: &str) -> Option<(i64, StoredForeign)> {
@@ -40,34 +57,21 @@ pub fn row_value(snapshot: &Snapshot, name: &str) -> Option<Value> {
     parse_json(setting, &json).ok()
 }
 
+/// The value of the session setting `setting` in effect: the session's value, else its default.
+#[must_use]
+pub fn session_current(session: SessionRead<'_>, setting: &Setting) -> Value {
+    session_value(session, setting).unwrap_or_else(|| default_value(setting))
+}
+
 /// The value of `setting` in effect: its stored value in its scope, else its default.
 #[must_use]
-pub fn current(snapshot: &Snapshot, setting: &Setting) -> Value {
-    let stored = match setting.scope {
-        Scope::Drawing => row_value(snapshot, setting.name),
-        Scope::Session => session_get(setting),
-    };
-    stored.unwrap_or_else(|| default_value(setting))
-}
-
-/// The session value of `setting`, when one is set.
-#[must_use]
-pub fn session_get(setting: &Setting) -> Option<Value> {
-    session().get(setting.name).cloned()
-}
-
-/// Sets (`Some`) or clears (`None`) the session value of `setting`.
-pub fn session_set(setting: &Setting, value: Option<Value>) {
-    let mut map = session();
-    match value {
-        Some(value) => map.insert(setting.name, value),
-        None => map.remove(setting.name),
-    };
-}
-
-/// The session map. A poisoned lock still gives its map: the values are plain data.
-fn session() -> MutexGuard<'static, BTreeMap<&'static str, Value>> {
-    SESSION.lock().unwrap_or_else(PoisonError::into_inner)
+pub fn current(snapshot: &Snapshot, session: SessionRead<'_>, setting: &Setting) -> Value {
+    match setting.scope {
+        Scope::Drawing => {
+            row_value(snapshot, setting.name).unwrap_or_else(|| default_value(setting))
+        }
+        Scope::Session => session_current(session, setting),
+    }
 }
 
 /// Writes (`Some`) or removes (`None`) the drawing row of `setting` in `txn`.
@@ -114,9 +118,10 @@ pub struct Values {
 }
 
 impl Values {
-    /// The effective values of the drawing `snapshot` and of the session.
+    /// The effective values of the drawing `snapshot` and of the session `session` reads. A caller
+    /// that needs drawing values only passes a reader that gives nothing.
     #[must_use]
-    pub fn of(snapshot: &Snapshot) -> Self {
+    pub fn of(snapshot: &Snapshot, session: SessionRead<'_>) -> Self {
         // One pass over the rows of the document, not one per setting: a drawing has many rows.
         let mut rows: BTreeMap<&str, &StoredForeign> = BTreeMap::new();
         for row in snapshot.foreign_rows() {
@@ -135,7 +140,7 @@ impl Values {
                         let json: serde_json::Value = serde_json::from_slice(&row.data).ok()?;
                         parse_json(setting, &json).ok()
                     }),
-                    Scope::Session => session_get(setting),
+                    Scope::Session => session_value(session, setting),
                 };
                 (
                     setting.name,

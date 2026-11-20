@@ -7,6 +7,7 @@
 
 mod common;
 
+use arc_command::{Invocation, Invoker, Permission, Roots, Session, Surface};
 use common::{Env, reasons};
 use serde_json::json;
 
@@ -111,7 +112,7 @@ fn save_writes_only_the_settings_the_file_or_the_user_gave_a_value() {
 }
 
 #[test]
-fn a_header_variable_the_save_does_not_write_back_is_reported_at_open() {
+fn a_header_variable_the_file_has_is_written_back_and_not_reported() {
     let mut env = Env::new();
     let path = env.write(
         "note.dxf",
@@ -119,9 +120,14 @@ fn a_header_variable_the_save_does_not_write_back_is_reported_at_open() {
     );
     let opened = env.run("draftbuilder.drawing.open_dxf", json!({"path": path}));
     assert!(
-        reasons(&opened).contains(&"db.io.header_not_written".to_owned()),
+        !reasons(&opened).contains(&"db.io.header_not_written".to_owned()),
         "{opened}"
     );
+    let out = env.path("note-out.dxf");
+    env.run("draftbuilder.drawing.save", json!({"path": out.clone()}));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.matches("$ARCTEST_NOTE").count(), 1, "written once");
+    assert!(text.contains("partner-owned"));
 }
 
 #[test]
@@ -464,5 +470,143 @@ fn the_distance_angle_is_measured_from_the_angle_base_in_the_drawing_direction()
     assert!(
         (angle - 3.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-9,
         "{distance}"
+    );
+}
+
+#[test]
+fn a_setting_replaces_a_preserved_variable_of_the_same_name_without_regard_to_case() {
+    let mut env = Env::new();
+    let path = env.write(
+        "scale.dxf",
+        dxf(&[("$ltscale", " 40\n2.5\n")], &[], false).as_bytes(),
+    );
+    env.run("draftbuilder.drawing.open_dxf", json!({"path": path}));
+    env.run(
+        "draftbuilder.settings.set",
+        json!({"name": "draft.linetype.global_scale", "value": 4.0}),
+    );
+    let out = env.path("scale-out.dxf");
+    env.run("draftbuilder.drawing.save", json!({"path": out.clone()}));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let names: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.eq_ignore_ascii_case("$LTSCALE"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(names.len(), 1, "written once: {names:?}");
+    let written: f64 = lines[names[0] + 2].parse().unwrap();
+    assert_eq!(written, 4.0, "the setting wins over the file's 2.5");
+}
+
+#[test]
+fn two_sessions_do_not_see_each_others_session_settings() {
+    let mut env = Env::new();
+    env.run("draftbuilder.drawing.new", json!({"unit": "meter"}));
+    let mut other = Session::new(Surface::Automation, [Permission::Edit, Permission::Read]);
+    other.roots = Roots::new([&env.dir], [&env.dir]).unwrap();
+    let set_in = |env: &Env, session: &Session, value: i64| {
+        let invocation = Invocation::new(
+            "draftbuilder.settings.set",
+            json!({"name": "snap.aperture", "value": value}),
+        );
+        Invoker::new(&env.commands)
+            .invoke(&env.document, session, invocation)
+            .unwrap();
+    };
+    let get_in = |env: &Env, session: &Session| -> i64 {
+        let invocation = Invocation::new(
+            "draftbuilder.settings.get",
+            json!({"name": "snap.aperture"}),
+        );
+        Invoker::new(&env.commands)
+            .invoke(&env.document, session, invocation)
+            .unwrap()
+            .value["value"]
+            .as_i64()
+            .unwrap()
+    };
+    let default = get_in(&env, &other);
+    set_in(&env, &env.session, 7);
+    set_in(&env, &other, 9);
+    assert_eq!(get_in(&env, &env.session), 7);
+    assert_eq!(get_in(&env, &other), 9);
+    assert_ne!(default, 7, "the first session's value is not the default");
+}
+
+/// The group pairs (code, text) after the header variable `name` of a DXF text, up to the next variable.
+fn header_groups(text: &str, name: &str) -> Vec<(i64, String)> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let at = lines.iter().position(|l| *l == name).unwrap();
+    let mut out = Vec::new();
+    for pair in lines[at + 1..].chunks(2) {
+        let [code, value] = pair else { break };
+        match code.parse::<i64>() {
+            Ok(9) | Ok(0) | Err(_) => break,
+            Ok(code) => out.push((code, (*value).to_owned())),
+        }
+    }
+    out
+}
+
+fn group_real(groups: &[(i64, String)], code: i64) -> f64 {
+    groups
+        .iter()
+        .find(|(c, _)| *c == code)
+        .unwrap()
+        .1
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn an_inch_file_opened_as_millimeter_saves_its_header_lengths_in_millimeters() {
+    let mut env = Env::new();
+    // The helper writes `$INSUNITS` as meters; this file states inches (1).
+    let text = dxf(
+        &[
+            ("$LIMMAX", " 10\n12.0\n 20\n9.0\n"),
+            ("$PDSIZE", " 40\n2.0\n"),
+            ("$UCSORG", " 10\n2.0\n 20\n3.0\n 30\n0.0\n"),
+            ("$UCSXDIR", " 10\n1.0\n 20\n0.0\n 30\n0.0\n"),
+        ],
+        &[],
+        false,
+    )
+    .replacen("$INSUNITS\n 70\n6\n", "$INSUNITS\n 70\n1\n", 1);
+    let path = env.write("inch.dxf", text.as_bytes());
+    let opened = env.run(
+        "draftbuilder.drawing.open_dxf",
+        json!({"path": path, "unit": "millimeter"}),
+    );
+    assert_eq!(opened["unit"], "millimeter");
+    let out = env.path("inch-out.dxf");
+    env.run("draftbuilder.drawing.save", json!({"path": out.clone()}));
+    let saved = std::fs::read_to_string(&out).unwrap();
+
+    // One inch is 25.4 millimeters: the saved header holds the file's lengths times 25.4.
+    let limits = header_groups(&saved, "$LIMMAX");
+    assert!(
+        (group_real(&limits, 10) - 12.0 * 25.4).abs() < 1e-9,
+        "{limits:?}"
+    );
+    assert!(
+        (group_real(&limits, 20) - 9.0 * 25.4).abs() < 1e-9,
+        "{limits:?}"
+    );
+    let point_size = header_groups(&saved, "$PDSIZE");
+    assert!(
+        (group_real(&point_size, 40) - 2.0 * 25.4).abs() < 1e-9,
+        "{point_size:?}"
+    );
+    let origin = header_groups(&saved, "$UCSORG");
+    assert!(
+        (group_real(&origin, 10) - 2.0 * 25.4).abs() < 1e-9,
+        "{origin:?}"
+    );
+    assert!(
+        (group_real(&origin, 20) - 3.0 * 25.4).abs() < 1e-9,
+        "{origin:?}"
     );
 }

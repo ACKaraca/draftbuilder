@@ -258,7 +258,7 @@ fn resolve_command(ctx: &mut Context<'_>, p: ResolveParams) -> Result<Resolved> 
             arc_base::Error::new(base_codes::VALUE_INVALID).with_detail("field", "aperture")
         );
     }
-    let values = Values::of(ctx.snapshot());
+    let values = Values::of(ctx.snapshot(), &|key| ctx.setting(key));
     let pick = resolve(
         &Request {
             snapshot: ctx.snapshot(),
@@ -293,7 +293,11 @@ fn osnap(ctx: &mut Context<'_>, p: OsnapParams) -> Result<settings::Report> {
     settings::write(ctx, running, Value::Int(bits))?;
     let geo = settings::lookup(GEO_SETTING)?;
     settings::write(ctx, geo, Value::Bool(geometric))?;
-    Ok(settings::report(ctx.snapshot(), running))
+    Ok(settings::report(
+        ctx.snapshot(),
+        &|key| ctx.setting(key),
+        running,
+    ))
 }
 
 /// Parameters of `draftbuilder.precision.filter`: X from one point and Y from another.

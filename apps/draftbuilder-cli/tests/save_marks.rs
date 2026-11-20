@@ -76,10 +76,12 @@ fn two_drawings_in_one_process_do_not_change_each_others_handles() {
     let partner_alone = alone.write("partner.dxf", &partner(fingerprint_c));
     let saved_alone = alone.path("alone.dxf");
     let package = alone.path("alone.draftb");
-    let run = common::cli_script(
+    // The explicit seed of the in-process harness (`script::SEED`): the bytes compare only with it.
+    let run = common::cli_script_seeded(
         &alone.dir,
         &package,
         &alone.write("c.scr", script(&saved_alone, &partner_alone, 2).as_bytes()),
+        Some("1"),
     );
     assert_eq!(
         run.status.code(),

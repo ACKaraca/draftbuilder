@@ -365,7 +365,6 @@ fn the_root_dictionary_names_the_preserved_object() {
 }
 
 #[test]
-#[ignore = "header variables other than the product's settings are not written back until the foundation preserves them"]
 fn the_unknown_header_variable_survives_the_save() {
     let mut h = Harness::new();
     let (_, saved) = edited(&mut h);

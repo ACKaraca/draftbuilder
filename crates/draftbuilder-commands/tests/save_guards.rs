@@ -1,40 +1,15 @@
-//! The guards of the save command, headless: a drawing whose export would drop an object of a kind the
-//! product creates is refused with nothing written; a read-only target and a symbolic link are refused
-//! and left as they were; a save keeps the permissions of the file it replaces (the last three are Unix only).
+//! The guards of the save command, headless: a read-only target and a symbolic link are refused and left
+//! as they were; a save keeps the permissions of the file it replaces (the last three are Unix only). The
+//! refusal of an export that drops a product object is unit-tested in `save.rs`; arrays are written.
 
 #![allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 
 mod common;
 
+#[cfg(unix)]
 use common::Env;
+#[cfg(unix)]
 use serde_json::json;
-
-fn drawing_with_a_hole_array(env: &mut Env) {
-    env.run("draftbuilder.drawing.new", json!({"unit": "meter"}));
-    let hole = env.run(
-        "draftbuilder.draw.circle",
-        json!({"shape": {"mode": "center", "center": [5.0, 5.0], "radius": 1.0}}),
-    )["ids"][0]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    env.run(
-        "draftbuilder.modify.array_rect",
-        json!({"objects": [hole], "rows": 1, "columns": 2, "column_spacing": 10.0}),
-    );
-}
-
-#[test]
-fn a_save_that_would_drop_an_array_is_refused_and_writes_nothing() {
-    let mut env = Env::new();
-    drawing_with_a_hole_array(&mut env);
-    let path = env.path("arrayed.dxf");
-    let error = env
-        .invoke("draftbuilder.drawing.save", json!({"path": path.clone()}))
-        .unwrap_err();
-    assert_eq!(error.code(), "db.cmd.export_drops_objects", "{error:?}");
-    assert!(!std::path::Path::new(&path).exists(), "no file is written");
-}
 
 #[cfg(unix)]
 #[test]

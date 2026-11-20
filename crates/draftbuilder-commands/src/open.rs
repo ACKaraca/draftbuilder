@@ -9,8 +9,6 @@
 use std::io::Read;
 use std::path::Path;
 
-use std::collections::BTreeSet;
-
 use arc_base::id::Identifier;
 use arc_base::{Error, ObjectId, Result};
 use arc_command::{CommandSpec, Context, IdParam, Permission, Registry, UndoBehavior};
@@ -236,7 +234,14 @@ pub(crate) fn open_drawing(
     }
     let output = read_drawing(ctx, path, format)?;
     ctx.progress(0.5, OPEN_PROGRESS.message_id);
-    let target = unit.unwrap_or_else(|| unit_of(&output.drawing));
+    let file_unit = unit_of(&output.drawing);
+    let target = unit.unwrap_or(file_unit);
+    // The factor of the lengths in the header: the file's unit over the drawing's. An unitless side
+    // converts nothing, as the import does.
+    let factor = match (file_unit.unit(), target.unit()) {
+        (Some(from), Some(to)) => from.scale / to.scale,
+        _ => 1.0,
+    };
     // The mapper states the conversion it applied (`draft.dxf.units_converted`, with the source
     // code and the factor) or that it converted nothing (`draft.dxf.units_unitless`); the report
     // carries that item and no other.
@@ -293,7 +298,7 @@ pub(crate) fn open_drawing(
         None => (fresh_fingerprint(ctx)?, Origin::Assigned),
     };
     database::set_fingerprint(ctx.txn()?, fingerprint, origin)?;
-    let load = crate::settings::header::load_header(ctx, &output.drawing)?;
+    let load = crate::settings::header::load_header(ctx, &output.drawing, factor)?;
     draftbuilder_io::report::note(
         &mut plan.report,
         draftbuilder_io::error::HEADER_VALUE_IGNORED,
@@ -311,28 +316,6 @@ pub(crate) fn open_drawing(
         draftbuilder_io::error::CURRENT_LAYER_FALLBACK,
         "layer",
         load.layer_fallback,
-    );
-    // A header variable the save writes back is one the export or the product's settings write; the
-    // others are counted, so the report says which values the file will lose.
-    let after = ctx.txn()?.snapshot().clone();
-    let exported: BTreeSet<String> = arc_draft_dxf::export_drawing(&after, space)
-        .map(|e| e.drawing.header.iter().map(|h| h.name.clone()).collect())
-        .unwrap_or_default();
-    let product: BTreeSet<String> = crate::settings::header::header_values(&after)
-        .iter()
-        .map(|h| h.name.clone())
-        .collect();
-    let not_written = output
-        .drawing
-        .header
-        .iter()
-        .filter(|h| !exported.contains(&h.name) && !product.contains(&h.name))
-        .count();
-    draftbuilder_io::report::note(
-        &mut plan.report,
-        draftbuilder_io::error::HEADER_NOT_WRITTEN,
-        "header",
-        not_written as u64,
     );
     Ok(OpenResult {
         space: IdParam(space),

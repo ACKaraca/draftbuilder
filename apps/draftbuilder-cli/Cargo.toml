@@ -22,6 +22,8 @@ serde_json = { workspace = true }
 image = { workspace = true }
 # The DWG fixture helper of the foundation, for the DWG open of the partner workflow.
 arc-io-dwg = { workspace = true, features = ["testing"] }
+# The header groups and read options of the DWG fixture, for the identity check of its open.
+arc-io-dxf = { workspace = true }
 # The handles of the objects, for the identity checks of the workflows.
 draftbuilder-model = { path = "../../crates/draftbuilder-model" }
 

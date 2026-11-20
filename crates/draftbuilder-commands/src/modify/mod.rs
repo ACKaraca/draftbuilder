@@ -18,7 +18,7 @@
 //!   source's kind and take draw orders beside the source (see [`replace_with_pieces`]).
 //! - An entity on a locked layer is refused with the foundation's `draft.layer.locked`, which the
 //!   foundation's own transform applies; the product's writes apply the same rule
-//!   ([`crate::layer::refuse_locked_entity`]).
+//!   (`arc_draft::lock::check_entity`).
 //! - A copy never copies a reference to another entity (dimensions, hatches with boundaries and
 //!   path arrays are associated with the entities they name): such a kind is refused with
 //!   `db.cmd.copy_associated`.
@@ -203,7 +203,7 @@ pub(crate) fn refuse_associated_copy(snapshot: &Snapshot, id: ObjectId) -> Resul
 /// Fails with the foundation's `draft.layer.locked` when an entity is on a locked layer.
 pub(crate) fn refuse_locked(snapshot: &Snapshot, ids: &[ObjectId]) -> Result<()> {
     for id in ids {
-        crate::layer::refuse_locked_entity(snapshot, *id)?;
+        arc_draft::lock::check_entity(snapshot, *id)?;
     }
     Ok(())
 }
@@ -348,7 +348,7 @@ pub(crate) fn replace_with_pieces(
     pieces: &[Curve2],
 ) -> Result<Vec<ObjectId>> {
     let snapshot = ctx.snapshot().clone();
-    crate::layer::refuse_locked_entity(&snapshot, id)?;
+    arc_draft::lock::check_entity(&snapshot, id)?;
     let key = entity_key(&snapshot, id)?;
     let object = snapshot.get(snapshot.resolve(id)?)?;
     let owner = object.header.owner;

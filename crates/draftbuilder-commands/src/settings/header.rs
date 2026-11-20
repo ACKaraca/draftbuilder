@@ -10,14 +10,14 @@ use arc_io_dxf::{Drawing, Group, Value as Dxf};
 
 use super::codes;
 use super::store::{self, Values};
-use super::{CURRENT_LAYER, Kind, Scope, Setting, TABLE, Value, parse_json, stored_form};
+use super::{CURRENT_LAYER, Kind, Quantity, Scope, Setting, TABLE, Value, parse_json, stored_form};
 
 /// The header variables of the drawing `snapshot` that carry its drawing-scoped settings, in
 /// table order, followed by the current coordinate system. The caller replaces the variables of
 /// the same names in the drawing's header.
 #[must_use]
 pub fn header_values(snapshot: &Snapshot) -> Vec<HeaderVariable> {
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     // Only the settings with a stored row are written: a default the file never had is not.
     let stored = store::stored_names(snapshot);
     let mut out: Vec<HeaderVariable> = TABLE
@@ -147,15 +147,28 @@ fn clamped(setting: &Setting, raw: f64) -> Option<Value> {
     }
 }
 
+/// The value of `setting` in the drawing's unit: a length or a point of the file, scaled by `factor` (the
+/// file's unit over the drawing's, see `open`). A positive-only length keeps a value that is not positive.
+#[must_use]
+pub fn scaled(setting: &Setting, value: Value, factor: f64) -> Value {
+    match (setting.quantity, value) {
+        (Quantity::Point, Value::Point(p)) => Value::Point([p[0] * factor, p[1] * factor]),
+        (Quantity::Length, Value::Real(v)) => Value::Real(v * factor),
+        (Quantity::PositiveLength, Value::Real(v)) if v > 0.0 => Value::Real(v * factor),
+        (_, value) => value,
+    }
+}
+
 /// Reads the drawing-scoped settings and the current coordinate system from the header of `drawing`
-/// into the document of `ctx`, in its transaction. A value that does not fit its setting is ignored
-/// (the default applies), a number out of range is clamped, and the counts say which. Only the
-/// product's settings are read: the other header variables of the file are not kept.
+/// into the document of `ctx`, in its transaction. The lengths and points are scaled by `factor` (the
+/// file's unit over the drawing's). A value that does not fit its setting is ignored (the default
+/// applies), a number out of range is clamped, and the counts say which. Only the product's settings
+/// are read: the other header variables of the file are not kept.
 ///
 /// # Errors
 ///
 /// The transaction's errors.
-pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<HeaderLoad> {
+pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing, factor: f64) -> Result<HeaderLoad> {
     let mut load = HeaderLoad::default();
     for setting in TABLE.iter().filter(|s| s.scope == Scope::Drawing) {
         let Some(header) = setting.header else {
@@ -171,7 +184,7 @@ pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<HeaderLoa
             Some(value)
         });
         let stored = match value {
-            Some(value) => stored_form(ctx.snapshot(), setting, value),
+            Some(value) => stored_form(ctx.snapshot(), setting, scaled(setting, value, factor)),
             None => Err(Error::new(codes::SETTING_VALUE)),
         };
         match stored {
@@ -184,6 +197,6 @@ pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<HeaderLoa
             Err(_) => load.ignored += 1,
         }
     }
-    load.ignored += crate::precision::ucs::load_header(ctx, drawing)?;
+    load.ignored += crate::precision::ucs::load_header(ctx, drawing, factor)?;
     Ok(load)
 }

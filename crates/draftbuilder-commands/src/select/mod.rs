@@ -422,7 +422,7 @@ fn similar(ctx: &mut Context<'_>, p: Similar) -> Result<Picked> {
 }
 
 /// The topmost object of the model space in draw order: the product's answer for the keyword
-/// `last` of object parameters (see [`crate::with_hooks`]). Empty when the drawing has no model
+/// `last` of object parameters (see [`crate::last_objects`]). Empty when the drawing has no model
 /// space or no selectable object.
 #[must_use]
 pub fn last_objects(snapshot: &Snapshot) -> Vec<ObjectId> {

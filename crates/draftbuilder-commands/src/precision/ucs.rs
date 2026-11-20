@@ -202,7 +202,7 @@ pub fn header_values(snapshot: &Snapshot) -> Vec<HeaderVariable> {
 /// # Errors
 ///
 /// The transaction's errors.
-pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<u64> {
+pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing, factor: f64) -> Result<u64> {
     // The three components of a header vector (codes 10, 20 and 30).
     let vector = |name: &str| -> Option<[f64; 3]> {
         let groups = drawing.header_variable(name)?;
@@ -220,6 +220,8 @@ pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<u64> {
     let (Some(origin), Some(x)) = (vector("$UCSORG"), vector("$UCSXDIR")) else {
         return Ok(0);
     };
+    // The origin is a length of the file: it is scaled into the drawing's unit with the other lengths.
+    let origin = [origin[0] * factor, origin[1] * factor, origin[2] * factor];
     // A system is accepted only when it is planar and right-handed, the form this module keeps: the
     // origin and the X direction have no Z, and a stated Y direction is the X direction turned a
     // quarter turn counterclockwise. Anything else (a 3D or mirrored system) is ignored and counted.

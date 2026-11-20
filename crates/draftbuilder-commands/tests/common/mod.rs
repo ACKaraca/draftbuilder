@@ -61,6 +61,7 @@ impl Env {
             ],
         );
         session.roots = Roots::new([&dir], [&dir]).unwrap();
+        let session = session.with_last_hook(Some(Arc::new(draftbuilder_commands::last_objects)));
         Self {
             document,
             commands: registry().unwrap(),
@@ -253,4 +254,68 @@ pub fn curve_of_entity(snapshot: &Snapshot, id: ObjectId) -> arc_geom::Curve2 {
         }
         _ => panic!("no geometry"),
     }
+}
+
+/// The `(x, y)` value of group `code` of a record, when it has one.
+fn point_of(record: &[(i64, String)], code: i64) -> Option<(f64, f64)> {
+    let value = |c: i64| {
+        record
+            .iter()
+            .find(|(k, _)| *k == c)
+            .and_then(|(_, v)| v.parse::<f64>().ok())
+    };
+    Some((value(code)?, value(code + 10)?))
+}
+
+/// An anonymous block of a DXF text: its name, its base point and the centers of its circles.
+type BlockCircles = (String, (f64, f64), Vec<(f64, f64)>);
+
+/// Where the displayed copies of the anonymous blocks (names starting `*A`) of a saved DXF text are:
+/// for each block reference (INSERT) of such a block, the centers of the circles of its block moved by
+/// the reference's insertion point relative to the block's base point. Sorted.
+pub fn displayed_circle_centers(text: &str) -> Vec<(f64, f64)> {
+    let records = dxf_records(text);
+    let mut blocks: Vec<BlockCircles> = Vec::new();
+    let mut open: Option<usize> = None;
+    for record in &records {
+        match record[0].1.as_str() {
+            "BLOCK" => {
+                let name = record
+                    .iter()
+                    .find(|(c, _)| *c == 2)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                if name.starts_with("*A") {
+                    blocks.push((name, point_of(record, 10).unwrap_or_default(), Vec::new()));
+                    open = Some(blocks.len() - 1);
+                }
+            }
+            "ENDBLK" => open = None,
+            "CIRCLE" => {
+                if let (Some(index), Some(center)) = (open, point_of(record, 10)) {
+                    blocks[index].2.push(center);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for record in records.iter().filter(|r| r[0].1 == "INSERT") {
+        let name = record
+            .iter()
+            .find(|(c, _)| *c == 2)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or_default();
+        let Some((_, base, centers)) = blocks.iter().find(|(n, _, _)| n == name) else {
+            continue;
+        };
+        let Some(insert) = point_of(record, 10) else {
+            continue;
+        };
+        for center in centers {
+            out.push((insert.0 + center.0 - base.0, insert.1 + center.1 - base.1));
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    out
 }

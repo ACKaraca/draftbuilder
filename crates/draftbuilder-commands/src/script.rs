@@ -49,8 +49,10 @@ use crate::select;
 use crate::select::candidates::{Candidates, Options};
 use crate::settings::{self, Value as SettingValue};
 
-/// The seed of the invocations of a script. Identifiers depend on the seed and on the revision a
-/// command runs on, so the same script on the same drawing creates the same identifiers.
+/// A fixed seed for runs that must create the same identifiers every time: the tests and the
+/// byte-identity checks. A run that names no seed takes one from the caller (the CLI draws it from the
+/// operating system), so the identifiers of two new drawings differ. Identifiers depend on the seed and
+/// on the revision a command runs on, so the same script with the same seed gives the same identifiers.
 pub const SEED: u64 = 1;
 
 /// How far, in drawing units, a picked point may lie from an object and still pick it, when the
@@ -230,9 +232,9 @@ pub fn session_units(snapshot: &Snapshot) -> Vec<Unit> {
 }
 
 /// Whether the command echo setting is on: each typed line is written to the echo stream.
-fn echo_on(snapshot: &Snapshot) -> bool {
+fn echo_on(session: &Session) -> bool {
     settings::find("command.echo")
-        .map(|setting| settings::store::current(snapshot, setting))
+        .map(|setting| settings::store::session_current(&|key| session.setting(key), setting))
         .is_some_and(|value| matches!(value, SettingValue::Bool(true)))
 }
 
@@ -561,6 +563,7 @@ struct Engine<'a> {
     cache: PickCache,
     tolerance: f64,
     skipped: u64,
+    seed: u64,
 }
 
 impl Engine<'_> {
@@ -621,7 +624,7 @@ impl Engine<'_> {
             session,
             selection: &selection,
             localized: &localized,
-            seed: SEED,
+            seed: self.seed,
         };
         let mut runner = |invocation: Invocation| -> Result<Outcome> {
             Invoker::new(registry).invoke(document, session, invocation)
@@ -645,7 +648,8 @@ impl Engine<'_> {
 /// Runs the script `text` on `document` with the session `session`, writing the echo of each typed
 /// line to `echo` while the command echo setting is on. The script stops at its first failing line.
 ///
-/// `session` is updated with the context units of the drawing before each line. A script that
+/// `seed` is the seed of every invocation of the script (see [`SEED`]). `session` is updated with the
+/// context units of the drawing before each line. A script that
 /// leaves a command waiting at its last line fails with `db.cmd.script_pending`. A script over one
 /// of its limits fails at the line that exceeds it.
 #[allow(
@@ -657,6 +661,7 @@ pub fn run(
     registry: &Registry,
     session: &mut Session,
     text: &str,
+    seed: u64,
     echo: &mut dyn Write,
 ) -> Report {
     let mut report = Report::default();
@@ -677,6 +682,7 @@ pub fn run(
         cache: PickCache::default(),
         tolerance: PICK_TOLERANCE,
         skipped: 0,
+        seed,
     };
     let mut last = ScriptLine {
         number: 0,
@@ -710,7 +716,7 @@ pub fn run(
         report.lines += 1;
         last = here.clone();
         let before = document.snapshot();
-        if echo_on(&before) {
+        if echo_on(session) {
             let record = json!({"level": "info", "event": "script.echo", "line": number,
                                 "detail": typed});
             let _ = writeln!(echo, "{record}");

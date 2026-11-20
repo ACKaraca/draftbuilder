@@ -106,6 +106,7 @@ pub fn product(clock: Arc<dyn Clock>, owner: LockOwner) -> Result<Product> {
         registry: registry()?,
         clock,
         owner,
+        last: Some(Arc::new(last_objects)),
     })
 }
 
@@ -135,12 +136,12 @@ fn fresh_seed() -> u64 {
         .map_or(1, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
-/// The session of a product caller with the product's answer for the keyword `last`: the topmost
-/// object of the model space in draw order. A session without it fails `last` with
-/// `cmd.selection.unavailable`, so the application and the tests build their sessions with this.
+/// The product's answer for the keyword `last`: the topmost object of the model space in draw order.
+/// Every session the product serves has it: the headless runner and the protocol server take it from
+/// [`product`], and the application gives it to its sessions with `ProductBuilder::last_objects`.
 #[must_use]
-pub fn with_hooks(session: Session) -> Session {
-    session.with_last_objects(select::last_objects)
+pub fn last_objects(snapshot: &Snapshot) -> Vec<ObjectId> {
+    select::last_objects(snapshot)
 }
 
 /// Opens the DXF drawing at `path` as a new document with the product's types and validators:

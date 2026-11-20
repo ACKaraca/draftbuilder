@@ -57,6 +57,7 @@ pub fn product(clock: Arc<dyn Clock>, owner: LockOwner) -> Result<Product> {
         .with_types(draftbuilder_commands::types()?)
         .with_commands(draftbuilder_commands::registry()?);
     arc_app::commands::register(builder.commands_mut())?;
+    builder.last_objects(draftbuilder_commands::last_objects);
     shell::prefs::register_settings(&mut builder)?;
     builder.package_extension("draftb");
     builder.file_type(FileType {

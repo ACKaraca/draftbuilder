@@ -45,7 +45,11 @@ pub struct Exported {
 
 fn set_variable(drawing: &mut Drawing, name: &str, text: String) {
     let values = vec![Group::text(2, text)];
-    match drawing.header.iter_mut().find(|v| v.name == name) {
+    match drawing
+        .header
+        .iter_mut()
+        .find(|v| v.name.eq_ignore_ascii_case(name))
+    {
         Some(var) => var.values = values,
         None => drawing.header.push(HeaderVariable {
             name: name.to_owned(),

@@ -54,15 +54,6 @@ pub const CURRENT_LAYER_FALLBACK: Reason = Reason {
     message_id: "db-io-loss-current-layer-fallback",
 };
 
-/// Header variables of the file that the save does not write back: the product keeps only its
-/// settings and the coordinate system, and the export writes its own variables.
-pub const HEADER_NOT_WRITTEN: Reason = Reason {
-    code: "db.io.header_not_written",
-    outcome: Outcome::Dropped,
-    severity: Severity::Warning,
-    message_id: "db-io-loss-header-not-written",
-};
-
 /// Every reason of this crate.
 pub const ALL: &[Reason] = &[
     FINGERPRINT_ASSIGNED,
@@ -71,7 +62,6 @@ pub const ALL: &[Reason] = &[
     HEADER_VALUE_IGNORED,
     HEADER_VALUE_CLAMPED,
     CURRENT_LAYER_FALLBACK,
-    HEADER_NOT_WRITTEN,
 ];
 
 #[cfg(test)]

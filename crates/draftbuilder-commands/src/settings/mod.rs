@@ -103,6 +103,21 @@ pub struct Text {
     pub message_id: &'static str,
 }
 
+/// What the value of a setting measures. A value read from a file is scaled into the drawing's unit when
+/// the file's unit differs from it (`settings::header::load_header`): a length or a point is scaled, and
+/// anything else is kept as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quantity {
+    /// Not a length: a count, a ratio, an angle, a flag, a layer or a name.
+    Neither,
+    /// A length.
+    Length,
+    /// A point: both coordinates are lengths.
+    Point,
+    /// A length that is scaled only when it is positive: a negative size is a percentage of the view.
+    PositiveLength,
+}
+
 /// One setting of the table.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Setting {
@@ -118,6 +133,8 @@ pub struct Setting {
     pub default: &'static str,
     /// The header variable the drawing writes it to, when there is one.
     pub header: Option<HeaderVar>,
+    /// What the value measures.
+    pub quantity: Quantity,
     /// The message identifier of the one-line description.
     pub description: Text,
 }
@@ -136,6 +153,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$CLAYER", 8),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-layer-current",
         },
@@ -147,6 +165,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "256",
         header: hv("$CECOLOR", 62),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-color-current",
         },
@@ -158,6 +177,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "ByLayer",
         header: hv("$CELTYPE", 6),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-linetype-current",
         },
@@ -169,6 +189,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "-1",
         header: hv("$CELWEIGHT", 370),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-lineweight-current",
         },
@@ -180,6 +201,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "-1",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-transparency-current",
         },
@@ -194,6 +216,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "1",
         header: hv("$LTSCALE", 40),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-linetype-global-scale",
         },
@@ -208,6 +231,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "1",
         header: hv("$CELTSCALE", 40),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-linetype-object-scale",
         },
@@ -219,6 +243,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "2",
         header: hv("$LUNITS", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-units-length",
         },
@@ -230,6 +255,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "4",
         header: hv("$LUPREC", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-units-length-precision",
         },
@@ -241,6 +267,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$AUNITS", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-units-angle",
         },
@@ -252,6 +279,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$AUPREC", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-units-angle-precision",
         },
@@ -263,6 +291,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "unitless",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-units-insertion",
         },
@@ -277,6 +306,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$ANGBASE", 50),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-angle-base",
         },
@@ -288,6 +318,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$ANGDIR", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-angle-direction",
         },
@@ -299,6 +330,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: hv("$LIMCHECK", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-limits-check",
         },
@@ -310,6 +342,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0,0",
         header: hv("$LIMMIN", 10),
+        quantity: Quantity::Point,
         description: Text {
             message_id: "db-setting-draft-limits-min",
         },
@@ -321,6 +354,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "420,297",
         header: hv("$LIMMAX", 10),
+        quantity: Quantity::Point,
         description: Text {
             message_id: "db-setting-draft-limits-max",
         },
@@ -332,6 +366,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$PDMODE", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-point-style",
         },
@@ -346,6 +381,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$PDSIZE", 40),
+        quantity: Quantity::PositiveLength,
         description: Text {
             message_id: "db-setting-draft-point-size",
         },
@@ -357,6 +393,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "63",
         header: hv("$OSMODE", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-snap-object-running",
         },
@@ -368,6 +405,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-snap-object-geometric-center",
         },
@@ -379,6 +417,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: hv("$ORTHOMODE", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-ortho",
         },
@@ -390,6 +429,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-polar-on",
         },
@@ -404,6 +444,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "90",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-polar-increment",
         },
@@ -415,6 +456,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-polar-additional",
         },
@@ -426,6 +468,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: hv("$SNAPMODE", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-snap-on",
         },
@@ -437,6 +480,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "10,10",
         header: hv("$SNAPUNIT", 10),
+        quantity: Quantity::Point,
         description: Text {
             message_id: "db-setting-draft-snap-spacing",
         },
@@ -448,6 +492,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0,0",
         header: hv("$SNAPBASE", 10),
+        quantity: Quantity::Point,
         description: Text {
             message_id: "db-setting-draft-snap-base",
         },
@@ -462,6 +507,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "0",
         header: hv("$SNAPANG", 50),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-snap-angle",
         },
@@ -473,6 +519,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "false",
         header: hv("$GRIDMODE", 70),
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-draft-grid-on",
         },
@@ -484,6 +531,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Drawing,
         default: "10,10",
         header: hv("$GRIDUNIT", 10),
+        quantity: Quantity::Point,
         description: Text {
             message_id: "db-setting-draft-grid-spacing",
         },
@@ -495,6 +543,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Session,
         default: "true",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-command-echo",
         },
@@ -506,6 +555,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Session,
         default: "true",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-snap-object-on",
         },
@@ -517,6 +567,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Session,
         default: "false",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-snap-override-typed-first",
         },
@@ -528,6 +579,7 @@ pub const TABLE: &[Setting] = &[
         scope: Scope::Session,
         default: "10",
         header: None,
+        quantity: Quantity::Neither,
         description: Text {
             message_id: "db-setting-snap-aperture",
         },
@@ -986,7 +1038,8 @@ fn by(mode: By) -> Doc {
 /// transparency (each by layer, by block or its own value) and its linetype scale.
 #[must_use]
 pub fn entity_fields(snapshot: &Snapshot) -> Vec<(usize, Doc)> {
-    let values = store::Values::of(snapshot);
+    // Entity fields come from drawing settings only: no session setting takes part.
+    let values = store::Values::of(snapshot, &|_| None);
     let mut out: Vec<(usize, Doc)> = Vec::new();
     if let Some(id) = current_layer(snapshot).or_else(|| default_layer(snapshot)) {
         out.push((entity::LAYER, Doc::Reference(id)));
@@ -1103,8 +1156,8 @@ pub struct Report {
 
 /// The report of `setting` as the drawing `snapshot` shows it.
 #[must_use]
-pub fn report(snapshot: &Snapshot, setting: &Setting) -> Report {
-    let value = store::current(snapshot, setting);
+pub fn report(snapshot: &Snapshot, session: store::SessionRead<'_>, setting: &Setting) -> Report {
+    let value = store::current(snapshot, session, setting);
     let default = default_value(setting);
     Report {
         name: setting.name.to_owned(),
@@ -1183,16 +1236,13 @@ pub(crate) fn write(ctx: &mut Context<'_>, setting: &Setting, value: Value) -> R
     let stored = stored_form(ctx.snapshot(), setting, value)?;
     match setting.scope {
         Scope::Drawing => store::write_row(ctx.txn()?, setting, Some(stored)),
-        Scope::Session => {
-            store::session_set(setting, Some(stored));
-            Ok(())
-        }
+        Scope::Session => ctx.set_setting(&store::session_key(setting), stored.to_json()),
     }
 }
 
 fn get(ctx: &mut Context<'_>, p: NameParams) -> Result<Report> {
     let setting = lookup(&p.name)?;
-    Ok(report(ctx.snapshot(), setting))
+    Ok(report(ctx.snapshot(), &|key| ctx.setting(key), setting))
 }
 
 fn set(ctx: &mut Context<'_>, p: SetParams) -> Result<Report> {
@@ -1202,7 +1252,7 @@ fn set(ctx: &mut Context<'_>, p: SetParams) -> Result<Report> {
     }
     let value = parse_json(setting, &p.value)?;
     write(ctx, setting, value)?;
-    Ok(report(ctx.snapshot(), setting))
+    Ok(report(ctx.snapshot(), &|key| ctx.setting(key), setting))
 }
 
 fn setvar(ctx: &mut Context<'_>, p: SetVarParams) -> Result<Report> {
@@ -1221,13 +1271,14 @@ fn setvar(ctx: &mut Context<'_>, p: SetVarParams) -> Result<Report> {
 fn list(ctx: &mut Context<'_>, p: ListParams) -> Result<Listing> {
     let pattern = p.filter.unwrap_or_else(|| "*".to_owned());
     let snapshot = ctx.snapshot();
+    let read = |key: &str| ctx.setting(key);
     let settings = TABLE
         .iter()
         .filter(|s| {
             wildcard_match(&pattern, s.name)
                 || s.compat.is_some_and(|c| wildcard_match(&pattern, c))
         })
-        .map(|s| report(snapshot, s))
+        .map(|s| report(snapshot, &read, s))
         .collect();
     Ok(Listing { settings })
 }
@@ -1235,7 +1286,7 @@ fn list(ctx: &mut Context<'_>, p: ListParams) -> Result<Listing> {
 fn set_current_layer(ctx: &mut Context<'_>, p: LayerParams) -> Result<Report> {
     let setting = lookup(CURRENT_LAYER)?;
     write(ctx, setting, Value::Text(p.layer))?;
-    Ok(report(ctx.snapshot(), setting))
+    Ok(report(ctx.snapshot(), &|key| ctx.setting(key), setting))
 }
 
 /// A prompt machine written as one function over the answers so far.

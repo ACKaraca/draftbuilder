@@ -248,7 +248,7 @@ is refused.
 | Open | `draftbuilder.drawing.open` reads a DWG file through `arc-io-dwg` (R13 to R2018, experimental for files that are not trusted) or a DXF file. The content decides the format: a DWG version signature, or the section markers of a DXF; the file name decides only when the content names neither. `draftbuilder.drawing.open_dxf` reads DXF only. The reader's report is merged into the plan's report. |
 | Units | An optional `unit` is the drawing's unit. The content is scaled by the factor the DXF mapper applies, and the report carries the mapper's own item: `draft.dxf.units_converted` with the source code and the factor, or `draft.dxf.units_unitless` when nothing is converted. Model-space geometry and text heights are scaled. Block content keeps the unit of its block record; the drafting model converts a reference when it draws. |
 | New | `draftbuilder.drawing.new` creates an empty drawing from the metric or imperial default, or from a template drawing (DWG or DXF). A template contributes its layers, linetypes, text styles, dimension styles and unit. Its geometry, blocks, objects, layouts and page setups are not copied, and its handles are not kept. A new drawing has no report. |
-| Save | `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf` write DXF for versions 2000 to 2018. The target must be a regular file or absent: a symbolic link is refused (`db.cmd.target_not_file`) and never replaced or followed, as before, and a read-only file is refused (`db.cmd.target_read_only`); both are left as they were. The save is refused with `db.cmd.export_drops_objects` (kind and count named) when the export would drop an object of a kind the product creates (an array, for now), and nothing is written; a dropped kind the product does not create is only reported in the loss report. The file is written to a temporary file that `Context::create_new` creates exclusively beside the target under a name with a random part; the temporary file takes the target's permissions on its open handle before any byte is written, is written, synced and closed, and `Context::replace_file` renames it over the target. The bookkeeping (the handles and the marks of the drawing) is recorded once the file is in place; a failed directory sync on Unix after the replace is not an error but a warning in the result (`warnings`). A failed save before the replace removes the temporary file and leaves the target as it was. In the application's native save the application creates the temporary file and the command writes it; the application then renames it over the target without the target's permission bits, a gap listed below. A DWG target is refused, because DWG writing is not available. |
+| Save | `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf` write DXF for versions 2000 to 2018. The target must be a regular file or absent: a symbolic link is refused (`db.cmd.target_not_file`) and never replaced or followed, as before, and a read-only file is refused (`db.cmd.target_read_only`); both are left as they were. The save is refused with `db.cmd.export_drops_objects` (kind and count named) when the export drops an object of a kind the product creates, and nothing is written. An array the export cannot place is such a drop: a path it cannot read, a block it cannot name, or more items than an array may hold after its path changed. An array the export writes as block references does not refuse the save; it is reported as approximated and counted in the save result's `arrays_as_references` field. Every other kind the product creates is written, and a dropped kind the product does not create is only reported in the loss report. The file is written to a temporary file that `Context::create_new` creates exclusively beside the target under a name with a random part; the temporary file takes the target's permissions on its open handle before any byte is written, is written, synced and closed, and `Context::replace_file` renames it over the target. The bookkeeping (the handles and the marks of the drawing) is recorded once the file is in place; a failed directory sync on Unix after the replace is not an error but a warning in the result (`warnings`). A failed save before the replace removes the temporary file and leaves the target as it was. In the application's native save the application creates the temporary file and the command writes it; the application then renames it over the target without the target's permission bits, a gap listed below. A DWG target is refused, because DWG writing is not available. |
 | Audit | `draftbuilder.drawing.audit` reports owner, handle-binding and curve geometry findings. It lists at most the session's record limit and counts the rest. It repairs nothing. |
 | Purge | `draftbuilder.drawing.purge` removes unused layers, linetypes, block definitions and styles. With `repeat` it makes passes until nothing more is unused, up to 64 passes; a preview runs the same passes and rolls them back, so it lists what a run removes. Protected names are kept per category: layers `0` and `Defpoints`, linetypes `Continuous`, `ByLayer` and `ByBlock`, and the text style `Standard`. A name that a preserved record of the file contains is kept too. |
 | Reports | Open and save return the loss report, which the CLI and the protocol return as JSON ([interoperability.md](interoperability.md#report-format)). |
@@ -350,7 +350,7 @@ with their own codes. Geometry changes use `arc-geom` (`trim`, `extend`, `split_
 | Polar array | `draftbuilder.modify.array_polar` (`ARRAYPOLAR`) | Count (1 to 10,000), total angle and turning of items, with the same source rules as the rectangular array | Rows and levels; independent objects; the prompt form does not ask for the turning |
 | Path array | `draftbuilder.modify.array_path` (`ARRAYPATH`) | A path entity (which must not be a source) with a count (1 to 10,000) or a spacing; alignment with the path; the source rules of the rectangular array | Divide and measure as separate prompts; the prompt form takes a count only |
 | Array editing | Array editing (ARRAYEDIT) | Not built | Parameter, source and item editing needs the array grips and an edit prompt machine, which are not in the product yet |
-| Array storage compatibility | Arrays are stored as the foundation stores them, with a block definition holding the items. The DXF export has no array mapping, so a save that would drop an array is refused with `db.cmd.export_drops_objects` (kind and count named) and nothing is written | Exploding an array is refused |
+| Array storage compatibility | Arrays are stored as the foundation stores them, with a block definition holding the items. The DXF save writes each item as a block reference (one `INSERT` per item, at the item's placement) and reports the array as approximated (`draft.dxf.array_approximated`): the counts, spacings, angles and paths are not written; the save result's `arrays_as_references` field counts them | Exploding an array is refused |
 | Erase | `draftbuilder.modify.erase` (`ERASE`, `E`) | Erases entities on unlocked layers; an entity another entity refers to is refused (`db.cmd.erase_dependent`) unless that entity is erased too. The refusal is part of every erase: trim, break, join, offset, mirror and explode erase through the same check; undo restores the erased entities | The restore-last-erased command (undo covers it) |
 | Explode | `draftbuilder.modify.explode` (`EXPLODE`, `X`) | Polylines without widths into lines and arcs; block references into their entities, placed by the reference (uniform scale, or a scale that differs only in sign). A by-block component takes the reference's effective value: the reference's own value, or, when the reference is by-layer, the value of the reference's layer, written explicitly because the component keeps its own layer. Layer-0 components take the reference's layer | Arrays, dimensions, hatches, text, tables, leaders and regions are refused with `db.cmd.explode_unsupported`; block attribute values are refused |
 | Property-controlled explode | Property-controlled explode | Not built | The appearance option of the components is not written yet (no command) |
@@ -388,8 +388,7 @@ source's. Erasing an entity that another entity refers to is refused wherever it
 
 Known limits of the family: a command does not update dependent entities the foundation does not
 regenerate; the prompt forms ask the points and values listed above, and the typed forms take the rest.
-The foundation gaps the family meets: the DXF export has no array mapping (`arc-draft-dxf`, export), so the save refuses a drawing with an array until the export maps arrays, which the foundation is to provide;
-`arc-draft` `lock.rs` is not public, so the product repeats the rule; the entity delete (`core.draft.entity.delete`)
+The foundation gaps the family meets: the entity delete (`core.draft.entity.delete`)
 is not callable from a product command, so the product's erase applies the transaction's delete rules itself and
 refuses dependents that are not erased; the foundation's transform is a uniform scale and a mirror, so a
 block reference with a non-uniform scale cannot be exploded.
@@ -398,22 +397,35 @@ block reference with a non-uniform scale cannot be exploded.
 The settings table (`draftbuilder-commands`, `settings`) lists each setting with its product name,
 compatibility name, type and range, scope, default, DXF header variable and catalog description.
 Drawing-scoped values are rows of the document, so a change is one undoable transaction and the
-package keeps them. Session-scoped values live in one process-wide store (`settings::store`): the
-foundation has no session settings slot and its command context exposes neither a session identifier
-nor a document identifier at the pinned revision, so the store cannot yet be keyed per session or per
-document. A session-scope write changes no document state and creates no undo step (checked by
+package keeps them. Session-scoped values (`command.echo`, `snap.object.on`, `snap.override.typed_first`
+and `snap.aperture`) are kept in the foundation's session settings under the product's namespace, as
+`draftbuilder.<setting name>` (for example `draftbuilder.snap.aperture`). Each session has its own values:
+two sessions of one document do not see each other's (`tests/review_settings.rs`). A session-scope write
+changes no document state, creates no undo step and takes effect when its command succeeds (checked by
 `tests/review_settings.rs`). Profiles are not built.
 
 Header variables, read on open (`settings::header::load_header`) and written on save
-(`settings::header::header_values`). The product reads and writes only its own settings and the current
-coordinate system; no other header variable of a file is kept. A setting is written only when it has a
+(`settings::header::header_values`). The product reads and writes its own settings and the current
+coordinate system. The other header variables of a file are kept by the foundation's export, in their
+order, as the file has them (`arc-draft-dxf`). The product's settings replace a stored variable of the
+same name without regard to case, so each name is written once and the setting wins. The foundation omits
+these variables, and the save's loss report lists each omission (`draft.dxf.header_derived_omitted`,
+`draft.dxf.header_handle_omitted`, `draft.dxf.header_name_omitted`, `draft.dxf.header_value_omitted`):
+the derived variables (`$EXTMIN`, `$EXTMAX`, `$PEXTMIN`, `$PEXTMAX`, `$TDUPDATE`, `$TDUUPDATE`,
+`$TDINDWG`, `$TDUSRTIMER`), the variables holding a handle (group codes 5, 105, 320 to 369, 390 to 399,
+480 and 481), the names that refer to no written entry (for example a named UCS or `$CMLSTYLE`), and the
+values the writer refuses. The code page is omitted as well. The open report no longer counts header
+variables. A setting is written only when it has a
 stored row, which is a value the user set or the file gave, so a default the file never had is not
 written. On open a value the setting cannot take is ignored and counted in `db.io.header_value_ignored`;
 a number outside its range is set to the nearest bound and counted in `db.io.header_value_clamped`; a
 frozen or missing current layer falls back to layer 0 and is counted in `db.io.current_layer_fallback`.
-The open report also counts the header variables of the file that the save will not write back, in
-`db.io.header_not_written`. Angle values (`$ANGBASE`, `$SNAPANG`) are degrees in the file and radians in
-the setting; they are converted on read and write. The current layer is written by its name from the
+Angle values (`$ANGBASE`, `$SNAPANG`) are degrees in the file and radians in
+the setting; they are converted on read and write. When the file's unit differs from the drawing's unit, the lengths and points read from the header are
+scaled by the file's unit over the drawing's (`settings::header::scaled`): the drawing limits, the snap
+spacing and base, the grid spacing, a positive point size and the origin of the current coordinate system.
+The table marks each setting as a length, a point or neither (`settings::Quantity`). The current layer is
+written by its name from the
 layer the drawing resolves (layer 0 when the stored one is gone). The current linetype is stored by
 identifier, like the layer; `ByLayer`, `ByBlock` and `Continuous` are stored by name. The current
 lineweight takes the standard values only (`settings::STANDARD_LINEWEIGHTS`). A list of additional polar
@@ -455,20 +467,15 @@ runs: the area of the loops it encloses, with their orientation; it is not refus
 have the command names `draftbuilder.inquiry.*`; the typed names `DIST`, `ID`, `AREA`, `LIST` and
 `MASSPROP` are the only typed names of the inquiry area. Length, resolve and filter have no typed names.
 
-Not built: profiles; a per-session settings store (see above); the display formats other than decimal;
-3D point filters and coordinate systems; the UCS icon, plan view and dynamic UCS; the feed of the point
-entry by the interactive host; the drawing limits check at point entry; header variables other than the
-product's settings, until the foundation writes them back.
+Not built: profiles; the display formats other than decimal; 3D point filters and coordinate systems;
+the UCS icon, plan view and dynamic UCS; the feed of the point entry by the interactive host; the drawing
+limits check at point entry.
 
 Foundation gaps in this area, reported to the foundation and not compensated in the product:
 
 - the DXF header of a file opened from DWG carries the library's angle values in radians (`$ANGBASE`,
   `$SNAPANG`): `arc-io-dwg`'s header mapping passes them unconverted; the product does not guess the
-  source's units;
-- the DWG mapper writes `$LWDISPLAY` (group 290, a flag) as an integer, which the DXF writer refuses
-  (`io.dxf.write_value_invalid`) when a product writes the variable; the product no longer writes it;
-- header variables other than the product's settings are not preserved through open and save: the
-  foundation's export builds the header from scratch.
+  source's units.
 
 ## Scripts and workflows
 
@@ -519,10 +526,10 @@ no transaction of its own, so its counts compare the snapshots before and after 
 
 The command echo setting (`command.echo`, `CMDECHO`) writes each typed line to the echo stream as a log
 record before it runs; the setting is read before each line, so the line that switches it on is not
-echoed. The setting is kept in the process-wide store (see above).
+echoed. The setting is a session setting (see above).
 
 The CLI runs a script on a package with `draftbuilder-cli script <file.draftb> --script <file>`, with
-`--create`, `--save`, `--allow-edit`, `--report <file>`, `--read-root` and `--write-root`. Before anything
+`--create`, `--save`, `--allow-edit`, `--report <file>`, `--seed <n>` (without it the run draws its seed from the operating system), `--read-root` and `--write-root`. Before anything
 runs, the report path is checked against the write roots, the script file is read through a read root
 (refused beyond the 16 MiB cap), a new package name is reserved, or an existing package is checked against
 the read roots, and the save path is checked against the write roots when `--save` is given. A created
@@ -538,25 +545,35 @@ already written for this drawing in this process. That mark is kept per drawing,
 in a table of 16 entries (the least recently used goes first). Its purpose: a save that is undone removes
 its handles from the document, and the mark keeps those handles from being issued again for this drawing
 in this process. Another drawing has another fingerprint and its handles do not depend on this one
-(`tests/save_marks.rs`). A second save of an unchanged drawing keeps the handles of its entities. Two
-limits remain: a new drawing takes its fingerprint from the script's identifier stream, so two new
-drawings made by the same command sequence share a fingerprint, and the export numbers its own records
-(tables, layouts, block markers) above the handles the document has bound, so a second save of the same
-drawing renumbers them (`save_marks.rs`, ignored test).
+(`tests/save_marks.rs`). A second save of an unchanged drawing keeps the handles of its entities. A new drawing's
+fingerprint, and the version identifier of each save, come from the identifier stream of the run, which
+is seeded by the run's seed. The `script` subcommand takes `--seed`, and so does the foundation's `run`
+subcommand, which the CLI passes through; both take a decimal number without a sign, so a leading `+` is
+refused. A run without `--seed` draws its seed from the operating system
+(`os_seed`), so two new drawings made by two such runs differ; with the same seed the identifiers are the
+same (`tests/seeds.rs`). Two limits remain: a protocol request that names no seed takes the foundation's
+default of 0 (see the gap below); and the export numbers its own records (tables, layouts, block markers)
+above the handles the document has bound, so a second save of the same drawing renumbers them
+(`save_marks.rs`, ignored test).
+
+Foundation gaps in identifiers, reported to the foundation and not compensated in the product:
+
+- new drawings created through the protocol without a seed share a fingerprint (the foundation's protocol
+  run defaults to seed 0).
 
 The product's workflows run as scripts, with their tests in `apps/draftbuilder-cli/tests`:
 
-- W01 (`w01.rs`, `tests/data/w01.scr`, `tests/data/w01_no_array.scr`): the team template is a DXF written
+- W01 (`w01.rs`, `tests/data/w01.scr`): the team template is a DXF written
   for the test. The script creates the drawing with its layers and units, sets the running snaps, polar
   increment and grid as settings, draws the outline with a polar entry and a direct distance along a
-  locked direction, draws holes, arrays one of them (`ARRAYRECT`, the sources picked by point), rounds the
+  locked direction, draws a hole, arrays it (`ARRAYRECT`, the sources picked by point), rounds the
   corners (`FILLET`, polyline form), offsets, trims, undoes two steps and redoes one, and saves. The array
-  version is refused at the save (`db.cmd.export_drops_objects`, nothing written), so the save of the
-  array-free version is the one whose file is compared. Checks: the commands, the counts, the exact
-  coordinates of the outline, its offset, the holes and the lines (to 1e-9), the trim and the states of
-  undo and redo, two replays with the same database before the save, two processes with byte-identical
-  files, and the handles of the file, which are the handles the database binds and which a reopen gives
-  back.
+  is saved as two block references, one per item. Checks: the commands, the counts, the exact
+  coordinates of the outline, its offset and the lines (to 1e-9), the hole and its array item at their
+  displayed positions, the trim and the states of undo and redo, two replays with the same database before
+  the save, two processes with byte-identical files (both runs with `--seed 1`: without a seed each run
+  draws its own identifiers), and the handles of the file: the lines, the polylines and the two
+  references, the first of which takes the array's handle; a reopen gives them back.
 - W05 (`w05.rs`, `tests/data/w05.scr`, `tests/data/partner_drawing.dxf`): the partner drawing (layers, a
   closed polyline, text, a block with an insert, a custom entity and a custom object of classes the product
   does not model, extended data, an unknown header variable and a fingerprint) is opened, its preservation
@@ -573,8 +590,6 @@ Gap tests, ignored, each with its reason (run with `--include-ignored`; each fai
 - the model-space owner of a preserved record is written as the export's own handle (`w05.rs`);
 - the root dictionary entry that names a preserved object is dropped (`w05.rs`);
 - a custom entity does not move with the plan: it is a preserved record, not an object (`w05.rs`);
-- a header variable other than the product's settings does not survive the save (`w05.rs`,
-  `settings_round_trip.rs`);
 - a second save of an unchanged drawing writes the same bytes apart from the version identifier: the
   export renumbers its own records (`save_marks.rs`).
 
@@ -584,7 +599,6 @@ Not covered by a script, with the reason:
   (`precision::resolve`), which reads a cursor; the resolution is tested by that module's own tests;
 - `snap-from` offsets (`FROM`): no prompt accepts a base point and an offset;
 - the direction of a direct distance by pointer: only the `<angle` lock is scriptable;
-- saving a drawing with an array: the export has no array mapping, so the save is refused (asserted);
 - moving a custom entity or object: a preserved record is not an object of the drawing;
 - cancelling a command: no typed line cancels one at the pinned revision, so the cancel error is not
   reachable from a script;

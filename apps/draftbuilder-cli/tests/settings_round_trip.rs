@@ -71,7 +71,6 @@ fn drawing_settings_survive_a_save_and_a_reopen() {
 }
 
 #[test]
-#[ignore = "header variables other than the product's settings are not written back until the foundation preserves them"]
 fn an_unknown_header_variable_survives_two_saves() {
     // The partner drawing is opened and saved; the saved file is opened in a new process-independent
     // document (a document holds one drawing) and saved again.

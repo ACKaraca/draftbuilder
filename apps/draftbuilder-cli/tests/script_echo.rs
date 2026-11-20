@@ -1,6 +1,6 @@
 //! The command echo (`command.echo`, the compatibility name `CMDECHO`): while it is on, each typed
-//! line of a script is written to the echo stream before it runs. The setting is kept for the
-//! process, so this test has a binary of its own.
+//! line of a script is written to the echo stream before it runs. The setting is a session setting, so
+//! this test has a binary of its own.
 
 #![allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 
@@ -12,7 +12,14 @@ use draftbuilder_commands::script;
 /// The lines a script echoes: the `detail` of each echo record, in order.
 fn echoed(h: &mut Harness, text: &str) -> Vec<String> {
     let mut sink = Vec::new();
-    script::run(&h.document, &h.registry, &mut h.session, text, &mut sink);
+    script::run(
+        &h.document,
+        &h.registry,
+        &mut h.session,
+        text,
+        script::SEED,
+        &mut sink,
+    );
     String::from_utf8(sink)
         .unwrap()
         .lines()
@@ -35,7 +42,7 @@ fn the_command_echo_writes_each_typed_line_until_it_is_switched_off() {
     let second = echoed(&mut h, "SETVAR name=CMDECHO value=off\nLINE\n0,1\n1,1\n\n");
     assert_eq!(second, ["SETVAR name=CMDECHO value=off"]);
 
-    // Switched back on, the echo returns (the setting is kept for the process). The line that
+    // Switched back on, the echo returns (the setting is kept by the session). The line that
     // switches it on is not echoed: the echo is read before each line runs.
     let third = echoed(
         &mut h,

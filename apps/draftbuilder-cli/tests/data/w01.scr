@@ -1,7 +1,7 @@
 ; Workflow W01 (docs/product/workflows.md): a metric part drawn from the team template with the
 ; precision tools, typed as a drafter types it. Placeholders are filled by the test: the template
-; and the output file. A blank line is Enter. The last line is the save: the drawing holds an array,
-; which the DXF export cannot write yet, so the save is refused and nothing is written.
+; and the output file. A blank line is Enter. The last line is the save: the array is written as block
+; references, one per item.
 
 ; Steps 1 and 2: the template, the current layer and the running settings.
 NEW template="{template}"
@@ -57,5 +57,5 @@ TR
 end
 UNDO 2
 REDO
-; Step 6: save as DXF. Refused while the drawing holds the array.
+; Step 6: save as DXF.
 SAVE path="{output}"

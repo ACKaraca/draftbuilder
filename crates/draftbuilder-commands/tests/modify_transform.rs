@@ -475,6 +475,7 @@ fn the_keyword_last_names_the_topmost_object_when_the_session_has_the_product_ho
     let first = line(&mut env, [0.0, 0.0], [1.0, 0.0]);
     let second = line(&mut env, [0.0, 2.0], [1.0, 2.0]);
     // Without the product's hook the keyword fails with its own code.
+    env.session = env.session.clone().with_last_hook(None);
     let error = env
         .invoke(
             "draftbuilder.modify.move",
@@ -482,7 +483,9 @@ fn the_keyword_last_names_the_topmost_object_when_the_session_has_the_product_ho
         )
         .unwrap_err();
     assert_eq!(error.code(), "cmd.selection.unavailable");
-    env.session = draftbuilder_commands::with_hooks(env.session.clone());
+    env.session = env.session.clone().with_last_hook(Some(std::sync::Arc::new(
+        draftbuilder_commands::last_objects,
+    )));
     let moved = env.run(
         "draftbuilder.modify.move",
         json!({"objects": ["last"], "displacement": [1.0, 0.0]}),

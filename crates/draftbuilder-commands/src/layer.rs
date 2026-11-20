@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Message, codes};
 use crate::fold::fold;
 use crate::purge;
-use crate::select::candidates::{default_layer, flag, reference};
+use crate::select::candidates::{default_layer, reference};
 use crate::vocabulary::{Area, register_names};
 
 /// The most transparency a layer takes: 90 percent (DB-LAYER-001).
@@ -442,9 +442,9 @@ fn change(ctx: &mut Context<'_>, p: ChangeLayer) -> Result<Moved> {
     let snapshot = ctx.snapshot();
     let target = layer_named(snapshot, &p.layer)?;
     let objects = entities(snapshot, &p.objects)?;
-    refuse_locked_layer(snapshot, target)?;
+    arc_draft::lock::check_layer(snapshot, target)?;
     for id in &objects {
-        refuse_locked_entity(snapshot, *id)?;
+        arc_draft::lock::check_entity(snapshot, *id)?;
     }
     let txn = ctx.txn()?;
     for id in &objects {
@@ -463,9 +463,9 @@ fn match_layer(ctx: &mut Context<'_>, p: MatchLayer) -> Result<Moved> {
     let snapshot = ctx.snapshot();
     let source_layer = layer_of(snapshot, default_layer(snapshot), source)?;
     let objects = entities(snapshot, &p.objects)?;
-    refuse_locked_layer(snapshot, source_layer)?;
+    arc_draft::lock::check_layer(snapshot, source_layer)?;
     for id in &objects {
-        refuse_locked_entity(snapshot, *id)?;
+        arc_draft::lock::check_entity(snapshot, *id)?;
     }
     let txn = ctx.txn()?;
     for id in &objects {
@@ -531,26 +531,6 @@ fn refuse_special(snapshot: &Snapshot, id: ObjectId) -> Result<()> {
     Ok(())
 }
 
-/// Fails with the foundation's `draft.layer.locked`, naming the layer, when the layer is locked.
-/// The foundation applies this rule in its own commands; the product applies it to the entities
-/// its commands write directly, because the foundation's check is not public.
-pub(crate) fn refuse_locked_layer(snapshot: &Snapshot, layer_id: ObjectId) -> Result<()> {
-    if flag(snapshot, layer_id, layer::LOCKED) != Some(true) {
-        return Ok(());
-    }
-    let name = name_of(snapshot, Some(layer_id)).unwrap_or_else(|| layer_id.to_string());
-    Err(Error::new(arc_draft::error::codes::LAYER_LOCKED).with_arg("layer", name))
-}
-
-/// Fails when the entity's own layer is locked (an entity that names no layer passes, as in the
-/// foundation).
-pub(crate) fn refuse_locked_entity(snapshot: &Snapshot, id: ObjectId) -> Result<()> {
-    match reference(snapshot, id, entity::LAYER) {
-        Some(layer_id) => refuse_locked_layer(snapshot, layer_id),
-        None => Ok(()),
-    }
-}
-
 /// Whether the object `id` is an entity.
 fn is_entity(snapshot: &Snapshot, id: ObjectId) -> bool {
     snapshot.resolve(id).ok().is_some_and(|handle| {
@@ -610,7 +590,7 @@ fn refuse_locked_dependents(snapshot: &Snapshot, removed: &BTreeSet<ObjectId>) -
     for id in removed {
         for referrer in snapshot.referrers(*id) {
             if !removed.contains(&referrer.source) && is_entity(snapshot, referrer.source) {
-                refuse_locked_entity(snapshot, referrer.source)?;
+                arc_draft::lock::check_entity(snapshot, referrer.source)?;
             }
         }
     }
@@ -727,7 +707,7 @@ fn delete_with_contents(ctx: &mut Context<'_>, p: LayerList) -> Result<Removed> 
         refuse_preserved(snapshot, &preserved, *id)?;
         let found = contents(snapshot, *id);
         if !found.is_empty() {
-            refuse_locked_layer(snapshot, *id)?;
+            arc_draft::lock::check_layer(snapshot, *id)?;
         }
         removed.extend(found);
     }
@@ -763,8 +743,8 @@ fn merge(ctx: &mut Context<'_>, p: MergeLayers) -> Result<Layers> {
         refuse_preserved(snapshot, &preserved, *source)?;
         let found = contents(snapshot, *source);
         if !found.is_empty() {
-            refuse_locked_layer(snapshot, *source)?;
-            refuse_locked_layer(snapshot, target)?;
+            arc_draft::lock::check_layer(snapshot, *source)?;
+            arc_draft::lock::check_layer(snapshot, target)?;
         }
         moved.extend(found);
     }

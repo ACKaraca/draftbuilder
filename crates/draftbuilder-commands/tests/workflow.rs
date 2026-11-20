@@ -155,16 +155,24 @@ fn workflow_w01_draw_array_round_offset_trim_undo_redo_save_and_reopen() {
     );
     assert_eq!(kinds(&env)["core.draft.line"], 2);
 
-    // Step 6: the save. The drawing holds an array, which the DXF export cannot write yet, so the save is
-    // refused and nothing is written (the round trip of a drawing without arrays is the next test).
-    let refused = env
-        .invoke(
-            "draftbuilder.drawing.save",
-            json!({"path": env.path("w01.dxf")}),
-        )
-        .unwrap_err();
-    assert_eq!(refused.code(), "db.cmd.export_drops_objects", "{refused:?}");
-    assert!(!env.dir.join("w01.dxf").exists());
+    // Step 6: the save. The array is written as block references, one per item, and reported.
+    let path = env.path("w01.dxf");
+    let saved = env.run("draftbuilder.drawing.save", json!({"path": path.clone()}));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        common::displayed_circle_centers(&text),
+        vec![(5.0, 5.0), (15.0, 5.0)],
+        "the hole and its array item, displayed at the item positions"
+    );
+    let arrays: Vec<&serde_json::Value> = saved["report"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["record_kind"] == "core.draft.array")
+        .collect();
+    assert_eq!(arrays.len(), 1, "{saved}");
+    assert_eq!(arrays[0]["outcome"], "approximated", "{saved}");
+    assert_eq!(arrays[0]["arguments"]["count"], 2, "{saved}");
     // Not covered by this workflow (not built): the team template (step 1), the running snaps and
     // polar tracking (step 2), the snap-from offsets of the hole (step 4), and the fillet of two
     // lines by pick (the polyline form is used); see docs/architecture/overview.md.

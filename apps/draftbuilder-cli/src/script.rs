@@ -27,11 +27,20 @@ struct Options {
     file: Option<PathBuf>,
     script: Option<PathBuf>,
     report: Option<PathBuf>,
+    seed: Option<u64>,
     create: bool,
     save: bool,
     allow_edit: bool,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+}
+
+/// A seed: a decimal `u64` without a sign, the syntax of the foundation's `run --seed`.
+fn seed_number(text: &str) -> Result<u64, Error> {
+    if text.starts_with('+') {
+        return Err(usage("seed"));
+    }
+    text.parse::<u64>().map_err(|_| usage("seed"))
 }
 
 fn usage(reason: impl Into<String>) -> Error {
@@ -63,7 +72,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, Error> {
                 }
                 continue;
             }
-            "--script" | "--report" | "--read-root" | "--write-root" => {}
+            "--script" | "--report" | "--read-root" | "--write-root" | "--seed" => {}
             _ => return Err(usage(format!("unknown_flag:{name}"))),
         }
         let value = match inline {
@@ -76,6 +85,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, Error> {
         match name.as_str() {
             "--script" if o.script.is_none() => o.script = Some(PathBuf::from(value)),
             "--report" if o.report.is_none() => o.report = Some(PathBuf::from(value)),
+            "--seed" if o.seed.is_none() => o.seed = Some(seed_number(&value)?),
             "--read-root" => o.read_roots.push(PathBuf::from(value)),
             "--write-root" => o.write_roots.push(PathBuf::from(value)),
             _ => return Err(usage(format!("repeated:{name}"))),
@@ -106,7 +116,7 @@ fn new_session(o: &Options, product: &Product) -> Result<Session, Error> {
     let mut session = Session::new(Surface::CommandLine, ceiling);
     session.roots = Roots::new(&o.read_roots, &o.write_roots)?;
     session.clock = Arc::clone(&product.clock);
-    Ok(draftbuilder_commands::with_hooks(session))
+    Ok(session.with_last_hook(product.last.clone()))
 }
 
 /// The script text, read through a read root and refused beyond the script size cap.
@@ -193,6 +203,8 @@ fn execute<E: Write>(
     }
     let target = created.clone().unwrap_or_else(|| file.to_path_buf());
     let editing = o.save || o.create;
+    // Without `--seed` the run draws its own, so two runs create different identifiers.
+    let seed = o.seed.unwrap_or_else(crate::os_seed);
     let report = match package_run(
         &target,
         editing,
@@ -201,6 +213,7 @@ fn execute<E: Write>(
         &limits,
         &mut new_session(o, product)?,
         &text,
+        seed,
         stderr,
     ) {
         Ok(report) => report,
@@ -239,6 +252,7 @@ fn package_run<E: Write>(
     limits: &Limits,
     session: &mut Session,
     text: &str,
+    seed: u64,
     stderr: &mut E,
 ) -> Result<draftbuilder_commands::script::Report, Error> {
     let mode = if editing {
@@ -258,8 +272,14 @@ fn package_run<E: Write>(
         DocumentConfig::default(),
     )?;
     draftbuilder_commands::install(&document);
-    let report =
-        draftbuilder_commands::script::run(&document, &product.registry, session, text, stderr);
+    let report = draftbuilder_commands::script::run(
+        &document,
+        &product.registry,
+        session,
+        text,
+        seed,
+        stderr,
+    );
     if save && report.failure.is_none() {
         package.save_document(&document, &[], None, &mut |_| Ok(()))?;
     }

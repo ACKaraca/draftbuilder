@@ -62,7 +62,9 @@ impl Harness {
         Self {
             dir,
             document,
-            session: draftbuilder_commands::with_hooks(session),
+            session: session.with_last_hook(Some(std::sync::Arc::new(
+                draftbuilder_commands::last_objects,
+            ))),
             registry: draftbuilder_commands::registry().unwrap(),
         }
     }
@@ -75,6 +77,7 @@ impl Harness {
             &self.registry,
             &mut self.session,
             text,
+            script::SEED,
             &mut echo,
         )
     }
@@ -203,21 +206,35 @@ pub fn type_of(snapshot: &Snapshot, handle: arc_doc::Handle) -> String {
 /// Runs the product's CLI in a new process: `script` on the package `package`, with the script
 /// file `script` and the directory `dir` as both roots. Creates the package and saves it.
 pub fn cli_script(dir: &Path, package: &Path, script: &Path) -> std::process::Output {
+    cli_script_seeded(dir, package, script, None)
+}
+
+/// [`cli_script`] with `--seed` when `seed` is given; without one the CLI draws its own seed.
+pub fn cli_script_seeded(
+    dir: &Path,
+    package: &Path,
+    script: &Path,
+    seed: Option<&str>,
+) -> std::process::Output {
     let root = dir.to_str().unwrap();
+    let mut args = vec![
+        "script".to_owned(),
+        package.to_str().unwrap().to_owned(),
+        "--script".to_owned(),
+        script.to_str().unwrap().to_owned(),
+        "--create".to_owned(),
+        "--save".to_owned(),
+        "--allow-edit".to_owned(),
+        "--read-root".to_owned(),
+        root.to_owned(),
+        "--write-root".to_owned(),
+        root.to_owned(),
+    ];
+    if let Some(seed) = seed {
+        args.extend(["--seed".to_owned(), seed.to_owned()]);
+    }
     std::process::Command::new(env!("CARGO_BIN_EXE_draftbuilder-cli"))
-        .args([
-            "script",
-            package.to_str().unwrap(),
-            "--script",
-            script.to_str().unwrap(),
-            "--create",
-            "--save",
-            "--allow-edit",
-            "--read-root",
-            root,
-            "--write-root",
-            root,
-        ])
+        .args(&args)
         .output()
         .unwrap()
 }
@@ -244,4 +261,65 @@ pub fn header_value(text: &str, name: &str) -> Option<String> {
         .windows(2)
         .find(|pair| pair[0].0 == 9 && pair[0].1 == name)
         .map(|pair| pair[1].1.clone())
+}
+
+/// An anonymous block of a DXF text: its name, its base point and the centers of its circles.
+type BlockCircles = (String, (f64, f64), Vec<(f64, f64)>);
+
+/// Where the displayed copies of the anonymous blocks (names starting `*A`) of a saved DXF text are: for
+/// each block reference of such a block, the centers of the block's circles moved by the reference's
+/// insertion point relative to the block's base point. Sorted.
+pub fn displayed_circle_centers(text: &str) -> Vec<(f64, f64)> {
+    let records = dxf_records(text);
+    let point = |record: &[(i64, String)], code: i64| -> Option<(f64, f64)> {
+        let value = |c: i64| {
+            record
+                .iter()
+                .find(|(k, _)| *k == c)
+                .and_then(|(_, v)| v.parse::<f64>().ok())
+        };
+        Some((value(code)?, value(code + 10)?))
+    };
+    let name_of = |record: &[(i64, String)]| {
+        record
+            .iter()
+            .find(|(k, _)| *k == 2)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let mut blocks: Vec<BlockCircles> = Vec::new();
+    let mut open: Option<usize> = None;
+    for record in &records {
+        match record[0].1.as_str() {
+            "BLOCK" => {
+                let name = name_of(record);
+                if name.starts_with("*A") {
+                    blocks.push((name, point(record, 10).unwrap_or_default(), Vec::new()));
+                    open = Some(blocks.len() - 1);
+                }
+            }
+            "ENDBLK" => open = None,
+            "CIRCLE" => {
+                if let (Some(index), Some(center)) = (open, point(record, 10)) {
+                    blocks[index].2.push(center);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for record in records.iter().filter(|r| r[0].1 == "INSERT") {
+        let name = name_of(record);
+        let Some((_, base, centers)) = blocks.iter().find(|(n, _, _)| *n == name) else {
+            continue;
+        };
+        let Some(insert) = point(record, 10) else {
+            continue;
+        };
+        for center in centers {
+            out.push((insert.0 + center.0 - base.0, insert.1 + center.1 - base.1));
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    out
 }

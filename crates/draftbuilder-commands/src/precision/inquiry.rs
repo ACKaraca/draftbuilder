@@ -128,7 +128,7 @@ pub struct DistanceTexts {
 ///
 /// The errors of the display formats.
 pub fn distance(snapshot: &Snapshot, from: [f64; 2], to: [f64; 2]) -> Result<Distance> {
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     let ucs = crate::precision::ucs::current(snapshot);
     let local_from = ucs.local(from);
     let local_to = ucs.local(to);
@@ -166,7 +166,7 @@ pub struct Identity {
 ///
 /// The errors of the display formats.
 pub fn identity(snapshot: &Snapshot, point: [f64; 2]) -> Result<Identity> {
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     let local = crate::precision::ucs::current(snapshot).local(point);
     Ok(Identity {
         point: local,
@@ -323,7 +323,7 @@ fn area_of(ctx: &Context<'_>, params: AreaParams) -> Result<AreaResult> {
         Running::Add => base + area,
         Running::Subtract => base - area,
     };
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     let length = |v: f64| length_text(snapshot, &values, v);
     Ok(AreaResult {
         area,
@@ -401,7 +401,7 @@ pub struct Lengths {
 fn length(ctx: &mut Context<'_>, p: ObjectsParams) -> Result<Lengths> {
     check_count(p.objects.len())?;
     let snapshot = ctx.snapshot();
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     let tolerance = Tolerance::DEFAULT;
     let mut items = Vec::new();
     for id in p.objects {
@@ -756,7 +756,7 @@ pub struct MassTexts {
 
 fn mass(ctx: &mut Context<'_>, p: MassParams) -> Result<MassProperties> {
     let snapshot = ctx.snapshot();
-    let values = Values::of(snapshot);
+    let values = Values::of(snapshot, &|_| None);
     let system = crate::precision::ucs::current(snapshot);
     let id = entity_of(snapshot, p.object)?;
     let curve = curve_of(snapshot, id)?.ok_or_else(|| Error::new(codes::NO_CURVE))?;

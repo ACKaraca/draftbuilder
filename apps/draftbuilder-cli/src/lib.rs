@@ -106,6 +106,18 @@ fn renderer() -> SnapshotRenderer {
     SnapshotRenderer::with_drawing(render::drawing)
 }
 
+/// A seed from the operating system's random source, for a run that names no seed. `std`'s
+/// `RandomState` takes its keys from the operating system, so two runs differ, and it changes its keys
+/// for every new state. The workspace has no randomness dependency of its own: `arc-base` enables only
+/// the `std` and `serde` features of `uuid`, so the v4 generator is not available.
+#[must_use]
+pub fn os_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
+}
+
 /// Runs the command-line program: `session` and `render` here, every other subcommand through
 /// the shared runner. Never panics: a fault is contained and reported as [`Exit::Internal`].
 pub fn run<R, W, E>(
@@ -126,6 +138,17 @@ where
         return script::run(args, product, &mut stdout, &mut stderr);
     }
     if args.first().and_then(|a| a.to_str()) != Some("render") {
+        // The foundation's `run` takes seed 0 when `--seed` is absent, which gives two new drawings
+        // the same identifiers; without a seed the CLI draws one from the operating system.
+        if args.first().and_then(|a| a.to_str()) == Some("run")
+            && !args.iter().any(|a| {
+                a.to_str()
+                    .is_some_and(|s| s == "--seed" || s.starts_with("--seed="))
+            })
+        {
+            args.insert(1, OsString::from("--seed"));
+            args.insert(2, OsString::from(os_seed().to_string()));
+        }
         let setup = |document: &arc_doc::Document| {
             draftbuilder_commands::install(document);
             Ok(())

@@ -274,8 +274,8 @@ fn open_move_undo_save_keeps_the_handles_of_the_source() {
     let unique: BTreeSet<&String> = written.iter().collect();
     assert_eq!(unique.len(), written.len(), "every handle is written once");
 
-    // The preservation report is surfaced. The only dropped entries of the open are header variables
-    // the save does not write back (review item 14); no object of the fixture is dropped.
+    // The preservation report of the open drops nothing: every header variable of the fixture is kept
+    // or owned by the export (`$ACADVER` is kept, the others are written by the export or the product).
     let dropped_reasons: Vec<&str> = opened["report"]["items"]
         .as_array()
         .unwrap()
@@ -283,12 +283,7 @@ fn open_move_undo_save_keeps_the_handles_of_the_source() {
         .filter(|item| item["outcome"] == "dropped")
         .filter_map(|item| item["reason"].as_str())
         .collect();
-    assert!(
-        dropped_reasons
-            .iter()
-            .all(|reason| *reason == "db.io.header_not_written"),
-        "{dropped_reasons:?}"
-    );
+    assert!(dropped_reasons.is_empty(), "{dropped_reasons:?}");
     assert_eq!(saved["report"]["summary"]["dropped"], 0, "{saved}");
 }
 

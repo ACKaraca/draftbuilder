@@ -1,9 +1,9 @@
 //! Workflow W01 (`docs/product/workflows.md`) run as a script: the typed lines of
-//! `tests/data/w01.scr` and `tests/data/w01_no_array.scr` run on an empty drawing, from the team's
-//! metric template written by this test. The checks are the geometry the workflow implies (read
-//! back from the saved DXF text, exact to a small tolerance), the identity of two replays, the
-//! states of the trim and of the undo and redo, the refused save of the drawing with the array,
-//! and the save of the drawing without it: byte-identical files, the same handles after a reopen.
+//! `tests/data/w01.scr` runs on an empty drawing, from the team's metric template written by this
+//! test. The checks are the geometry the workflow implies (read back from the saved DXF text, exact to
+//! a small tolerance), with the array written as block references at its item positions, the identity
+//! of two replays before the save, the states of the trim and of the undo and redo, and the save: two
+//! processes give byte-identical files, and the handles of the file are the database's after a reopen.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,16 +17,17 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use arc_doc::Snapshot;
-use common::{Harness, fill, handle_of, section, type_of, value_of, values_of};
+use common::{
+    Harness, displayed_circle_centers, fill, handle_of, section, type_of, value_of, values_of,
+};
 use draftbuilder_commands::script;
 use draftbuilder_model::database::Database;
 
 const W01: &str = include_str!("data/w01.scr");
-const W01_NO_ARRAY: &str = include_str!("data/w01_no_array.scr");
 const TEMPLATE: &[u8] = include_bytes!("data/team_metric_template.dxf");
 
-/// The commands of the workflow with the array, in the order they complete.
-const WITH_ARRAY: &[&str] = &[
+/// The commands of the workflow, in the order they complete (the save last).
+const COMMANDS: &[&str] = &[
     "draftbuilder.drawing.new",
     "draftbuilder.settings.setvar",
     "draftbuilder.precision.osnap",
@@ -46,6 +47,7 @@ const WITH_ARRAY: &[&str] = &[
     "draftbuilder.modify.trim",
     "history.undo",
     "history.redo",
+    "draftbuilder.drawing.save",
 ];
 
 /// The tangent of a quarter of a right angle: the bulge of a quarter circle.
@@ -59,6 +61,13 @@ fn paths(h: &Harness, output: &str) -> (std::path::PathBuf, std::path::PathBuf) 
         h.write("team_metric_template.dxf", TEMPLATE),
         h.path(output),
     )
+}
+
+/// The script up to its last `SAVE` line.
+fn before_save(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let save = lines.iter().rposition(|l| l.starts_with("SAVE ")).unwrap();
+    lines[..save].join("\n")
 }
 
 /// The number of objects of each type.
@@ -129,19 +138,19 @@ fn entities(text: &str, kind: &str) -> Vec<Vec<(i64, String)>> {
 }
 
 #[test]
-fn w01_draws_the_part_and_the_save_is_refused_because_of_the_array() {
+fn w01_draws_the_part_and_saves_the_array_as_block_references() {
     let mut h = Harness::new();
     let (template, output) = paths(&h, "w01.dxf");
     let text = fill(W01, &[("template", &template), ("output", &output)]);
     let report = h.run(&text);
-
-    let last = script::lines(&text).last().unwrap().number;
-    let failure = report.failure.as_ref().expect("the save is refused");
-    assert_eq!(failure.line, last, "the save is the last line");
-    assert_eq!(failure.error.code(), "db.cmd.export_drops_objects");
-    assert!(!output.exists(), "nothing is written");
+    assert!(
+        report.failure.is_none(),
+        "{:?}",
+        report.failure.as_ref().map(|f| f.error.code())
+    );
+    assert!(output.exists(), "the save writes the file");
     let ran: Vec<&str> = report.commands.iter().map(|c| c.command.as_str()).collect();
-    assert_eq!(ran, WITH_ARRAY);
+    assert_eq!(ran, COMMANDS);
 
     let snapshot = h.document.snapshot();
     let counts = counts(&snapshot);
@@ -156,32 +165,34 @@ fn w01_draws_the_part_and_the_save_is_refused_because_of_the_array() {
         2,
         "centerline and wall: {counts:?}"
     );
-    assert_eq!(
-        count("core.draft.circle"),
-        1,
-        "the hole the array copies: {counts:?}"
-    );
     assert_eq!(count("core.draft.array"), 1, "the array: {counts:?}");
+
+    let saved = std::fs::read_to_string(&output).unwrap();
+    assert_eq!(
+        displayed_circle_centers(&saved),
+        vec![(5.0, 5.0), (15.0, 5.0)],
+        "the hole and its array item, displayed at the item positions"
+    );
 }
 
 #[test]
 fn w01_replayed_as_a_token_script_gives_an_identical_database() {
+    // Compared before the save: a save writes the handles of the objects it writes, and the mark of
+    // those handles is kept per drawing fingerprint in the process, so a second save of the same
+    // drawing in this process gets higher handles.
     let mut first = Harness::new();
     let mut second = Harness::new();
     let (template_a, output_a) = paths(&first, "w01.dxf");
     let (template_b, output_b) = paths(&second, "w01.dxf");
-    let run_a = first.run(&fill(
-        W01,
-        &[("template", &template_a), ("output", &output_a)],
-    ));
-    let run_b = second.run(&fill(
-        W01,
-        &[("template", &template_b), ("output", &output_b)],
-    ));
+    let script_a = fill(W01, &[("template", &template_a), ("output", &output_a)]);
+    let script_b = fill(W01, &[("template", &template_b), ("output", &output_b)]);
+    let run_a = first.run(&before_save(&script_a));
+    let run_b = second.run(&before_save(&script_b));
+    assert!(run_a.failure.is_none() && run_b.failure.is_none());
 
-    assert_eq!(
-        dump(&first.document.snapshot()),
-        dump(&second.document.snapshot())
+    common::assert_same_lines(
+        &dump(&first.document.snapshot()),
+        &dump(&second.document.snapshot()),
     );
     let commands_a: Vec<_> = run_a
         .commands
@@ -197,13 +208,10 @@ fn w01_replayed_as_a_token_script_gives_an_identical_database() {
 }
 
 #[test]
-fn w01_without_the_array_draws_the_exact_geometry() {
+fn w01_saves_the_exact_geometry_with_the_array_as_block_references() {
     let mut h = Harness::new();
     let (template, output) = paths(&h, "w01.dxf");
-    let text = fill(
-        W01_NO_ARRAY,
-        &[("template", &template), ("output", &output)],
-    );
+    let text = fill(W01, &[("template", &template), ("output", &output)]);
     let report = h.run(&text);
     assert!(
         report.failure.is_none(),
@@ -251,26 +259,11 @@ fn w01_without_the_array_draws_the_exact_geometry() {
         ],
     );
 
-    let mut holes: Vec<(f64, f64, f64, String)> = entities(&saved, "CIRCLE")
-        .iter()
-        .map(|r| {
-            (
-                values_of(r, 10)[0],
-                values_of(r, 20)[0],
-                values_of(r, 40)[0],
-                value_of(r, 8).unwrap().to_owned(),
-            )
-        })
-        .collect();
-    holes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    assert_eq!(holes.len(), 2);
-    assert_eq!(holes[0].0, 5.0);
-    assert_eq!(holes[0].1, 5.0);
-    assert_eq!(holes[0].2, 1.0);
-    assert_eq!(holes[0].3, "HOLES");
-    assert_eq!(holes[1].0, 15.0);
-    assert_eq!(holes[1].1, 5.0);
-    assert_eq!(holes[1].2, 1.0);
+    assert_eq!(
+        displayed_circle_centers(&saved),
+        vec![(5.0, 5.0), (15.0, 5.0)],
+        "the hole and its array item"
+    );
 
     let mut lines: Vec<Vec<f64>> = entities(&saved, "LINE")
         .iter()
@@ -294,7 +287,7 @@ fn w01_without_the_array_draws_the_exact_geometry() {
 }
 
 #[test]
-fn w01_without_the_array_saves_identical_files_with_the_same_handles_after_reopen() {
+fn w01_saves_identical_files_with_the_same_handles_after_reopen() {
     // Two processes give two files with the same bytes. Within one process the handles a save
     // writes depend on the saves before it (the save keeps a mark of the handles it wrote), so the
     // byte comparison runs the CLI twice.
@@ -304,14 +297,12 @@ fn w01_without_the_array_saves_identical_files_with_the_same_handles_after_reope
         let output = dir.path(&format!("{name}.dxf"));
         let script = dir.write(
             &format!("{name}.scr"),
-            fill(
-                W01_NO_ARRAY,
-                &[("template", &template), ("output", &output)],
-            )
-            .as_bytes(),
+            fill(W01, &[("template", &template), ("output", &output)]).as_bytes(),
         );
         let package = dir.path(&format!("{name}.draftb"));
-        let run = common::cli_script(&dir.dir, &package, &script);
+        // The explicit seed is what makes the two files byte-identical: without one each run draws its
+        // own seed, so each new drawing gets its own identifiers and fingerprint.
+        let run = common::cli_script_seeded(&dir.dir, &package, &script, Some("1"));
         assert_eq!(
             run.status.code(),
             Some(0),
@@ -331,19 +322,8 @@ fn w01_without_the_array_saves_identical_files_with_the_same_handles_after_reope
     let mut second = Harness::new();
     let (template_a, output_a) = paths(&first, "w01.dxf");
     let (template_b, output_b) = paths(&second, "w01.dxf");
-    let before_save = |text: &str| -> String {
-        let lines: Vec<&str> = text.lines().collect();
-        let save = lines.iter().rposition(|l| l.starts_with("SAVE ")).unwrap();
-        lines[..save].join("\n")
-    };
-    let script_a = fill(
-        W01_NO_ARRAY,
-        &[("template", &template_a), ("output", &output_a)],
-    );
-    let script_b = fill(
-        W01_NO_ARRAY,
-        &[("template", &template_b), ("output", &output_b)],
-    );
+    let script_a = fill(W01, &[("template", &template_a), ("output", &output_a)]);
+    let script_b = fill(W01, &[("template", &template_b), ("output", &output_b)]);
     assert!(first.run(&before_save(&script_a)).failure.is_none());
     assert!(second.run(&before_save(&script_b)).failure.is_none());
     common::assert_same_lines(
@@ -358,20 +338,36 @@ fn w01_without_the_array_saves_identical_files_with_the_same_handles_after_reope
         .iter()
         .filter_map(|r| handle_of(r))
         .collect();
-    let bound = entity_handles(&first.document.snapshot());
+    // The file's entities: two polylines and two lines bound to their objects, and the array as two
+    // block references. The first reference takes the array's handle, the second has a handle that no
+    // object binds.
+    let snapshot = first.document.snapshot();
+    let database = Database::of(&snapshot);
+    let array = snapshot
+        .iter()
+        .find(|(handle, _)| type_of(&snapshot, *handle) == "core.draft.array")
+        .map(|(_, object)| database.handle_of(object.id).unwrap().to_hex())
+        .unwrap();
+    let mut expected = entity_handles(&snapshot);
+    expected.insert(array.clone());
     assert_eq!(
         file_handles.len(),
         6,
-        "two polylines, two circles, two lines"
+        "two polylines, two lines, two references"
     );
-    assert_eq!(file_handles, bound);
+    assert!(
+        expected.is_subset(&file_handles),
+        "{expected:?} {file_handles:?}"
+    );
+    assert_eq!(file_handles.difference(&expected).count(), 1);
 
     // Reopened, the drawing has the same entities and the same handles.
     let reopened = first.reopen(&output_a);
     assert_eq!(entity_handles(&reopened.snapshot()), file_handles);
 }
 
-/// The handles the database binds to the entities (lines, polylines and circles) of `snapshot`.
+/// The handles the database binds to the lines, polylines and block references of `snapshot`. A
+/// circle of a block is not an entity of the model space, so it is not listed.
 fn entity_handles(snapshot: &Snapshot) -> BTreeSet<String> {
     let database = Database::of(snapshot);
     let mut out = BTreeSet::new();
@@ -379,7 +375,7 @@ fn entity_handles(snapshot: &Snapshot) -> BTreeSet<String> {
         if [
             "core.draft.line",
             "core.draft.polyline",
-            "core.draft.circle",
+            "core.draft.block_ref",
         ]
         .contains(&type_of(snapshot, handle).as_str())
         {
@@ -393,7 +389,7 @@ fn entity_handles(snapshot: &Snapshot) -> BTreeSet<String> {
 fn w01_trim_undo_and_redo_restore_the_intermediate_states() {
     // The state after the trim, after the two undos and after the redo: each is the script up to
     // that line, saved to a file that is read back.
-    let script_lines: Vec<script::ScriptLine> = script::lines(W01_NO_ARRAY).collect();
+    let script_lines: Vec<script::ScriptLine> = script::lines(W01).collect();
     let stop = |word: &str| script_lines.iter().position(|l| l.text == word).unwrap();
     let states = [
         ("end", stop("end")),

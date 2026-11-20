@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Message, codes};
 use crate::fold::fold;
-use crate::layer::{self, Moved, refuse_locked_entity, refuse_locked_layer};
+use crate::layer::{self, Moved};
 use crate::select::candidates::reference;
 use crate::vocabulary::{Area, register_names};
 
@@ -170,9 +170,9 @@ fn change(ctx: &mut Context<'_>, p: ChangeProps) -> Result<Moved> {
     let objects = entities(snapshot, &p.objects)?;
     // The writes are computed before the transaction takes the context, so a bad value fails the
     // command before anything is written. An entity on a locked layer is not changed, and an
-    // entity is not moved onto a locked layer (the foundation's rule, see `layer::refuse_locked_layer`).
+    // entity is not moved onto a locked layer (the foundation's rule, `arc_draft::lock::check_layer`).
     for id in &objects {
-        refuse_locked_entity(snapshot, *id)?;
+        arc_draft::lock::check_entity(snapshot, *id)?;
     }
     let mut writes: Vec<Write> = Vec::new();
     if let Some(name) = &p.layer {
@@ -182,7 +182,7 @@ fn change(ctx: &mut Context<'_>, p: ChangeProps) -> Result<Moved> {
             name,
             codes::LAYER_UNKNOWN,
         )?;
-        refuse_locked_layer(snapshot, target)?;
+        arc_draft::lock::check_layer(snapshot, target)?;
         writes.push((entity::LAYER, Some(Value::Reference(target))));
     }
     if let Some(setting) = &p.color {
@@ -263,10 +263,10 @@ fn match_props(ctx: &mut Context<'_>, p: MatchProps) -> Result<Moved> {
     // The copy also copies the source's layer, which moves every destination onto it: a locked
     // source layer refuses the copy, as a move onto a locked layer is refused.
     if let Some(source_layer) = reference(snapshot, source, entity::LAYER) {
-        refuse_locked_layer(snapshot, source_layer)?;
+        arc_draft::lock::check_layer(snapshot, source_layer)?;
     }
     for id in &objects {
-        refuse_locked_entity(snapshot, *id)?;
+        arc_draft::lock::check_entity(snapshot, *id)?;
     }
     let handle = snapshot.resolve(source)?;
     let values = snapshot.get(handle)?.values.clone();
