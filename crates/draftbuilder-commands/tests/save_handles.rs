@@ -275,17 +275,20 @@ fn a_refused_target_fails_before_anything_is_recorded() {
     permissions.set_readonly(true);
     std::fs::set_permissions(&read_only, permissions).unwrap();
     let outside = std::env::temp_dir().join(format!("db-outside-{}.dxf", std::process::id()));
-    let mut targets = vec![
-        directory.to_str().unwrap().to_owned(),
-        read_only.to_str().unwrap().to_owned(),
-        outside.to_str().unwrap().to_owned(),
-    ];
+    // A symbolic link is a fourth refused target where the platform lets a test create one.
     #[cfg(unix)]
-    {
+    let link = {
         let link = env.dir.join("link.dxf");
         std::os::unix::fs::symlink(env.dir.join("real.dxf"), &link).unwrap();
-        targets.push(link.to_str().unwrap().to_owned());
-    }
+        Some(link.to_str().unwrap().to_owned())
+    };
+    #[cfg(not(unix))]
+    let link: Option<String> = None;
+    let targets: Vec<String> = [&directory, &read_only, &outside]
+        .iter()
+        .map(|path| path.to_str().unwrap().to_owned())
+        .chain(link)
+        .collect();
     let (revision, mark, rows) = (
         env.document.snapshot().revision(),
         top(&env),
