@@ -14,10 +14,10 @@
 mod arc;
 mod circle;
 mod construction;
-mod create;
+pub(crate) mod create;
 mod donut;
 mod ellipse;
-mod geometry;
+pub(crate) mod geometry;
 mod line;
 mod point;
 mod polygon;

@@ -12,7 +12,7 @@
 //! - `draftbuilder.drawing.audit` ([`audit`]): reports the checks that fail, repairs nothing;
 //! - `draftbuilder.drawing.purge` ([`purge`]): removes unused objects, with a preview.
 //!
-//! The names of these commands and of the core commands the product uses (`MOVE`, alias `M`) are
+//! The names of these commands and of the commands the product uses (`MOVE`, alias `M`) are
 //! the rows of [`vocabulary`]. The per-area modules ([`draw`], [`modify`], [`select`], [`layer`],
 //! [`settings`], [`precision`]) register the commands of their area and apply their rows; their
 //! registration is called from [`registry`], the one registration point. Name prefixes
@@ -46,7 +46,7 @@ use std::sync::Arc;
 
 use arc_base::{ObjectId, Result};
 use arc_command::headless::Product;
-use arc_command::{Clock, Invocation, Invoker, Permission, Registry, Roots, Session, Surface};
+use arc_command::{Clock, Invocation, Invoker, Registry, Session};
 use arc_doc::graph::Evaluators;
 use arc_doc::package::LockOwner;
 use arc_doc::{Document, DocumentConfig, Snapshot, TypeRegistry};
@@ -88,6 +88,7 @@ pub fn registry() -> Result<Registry> {
     settings::register(&mut registry)?;
     precision::register(&mut registry)?;
     vocabulary::register_names(&mut registry, vocabulary::Area::Drawing)?;
+    names::install(&mut registry)?;
     Ok(registry)
 }
 
@@ -133,33 +134,21 @@ fn fresh_seed() -> u64 {
         .map_or(1, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
-/// A command session over `dir`: read access, and write access with `write`.
-fn file_session(dir: &Path, write: bool) -> Result<Session> {
-    let mut granted = vec![Permission::Read, Permission::Edit, Permission::FileRead];
-    if write {
-        granted.push(Permission::FileWrite);
-    }
-    let mut session = Session::new(Surface::Automation, granted);
-    session.roots = if write {
-        Roots::new([dir], [dir])?
-    } else {
-        Roots::new([dir], std::iter::empty::<&Path>())?
-    };
-    Ok(session)
-}
-
-fn parent_of(path: &Path) -> &Path {
-    path.parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
+/// The session of a product caller with the product's answer for the keyword `last`: the topmost
+/// object of the model space in draw order. A session without it fails `last` with
+/// `cmd.selection.unavailable`, so the application and the tests build their sessions with this.
+#[must_use]
+pub fn with_hooks(session: Session) -> Session {
+    session.with_last_objects(select::last_objects)
 }
 
 /// Opens the DXF drawing at `path` as a new document with the product's types and validators:
-/// the native open of the application.
+/// the native open of the application. `session` is the application's session with the read
+/// root of the file's directory, as the application passes it.
 ///
 /// # Errors
 /// The errors of the document and of `draftbuilder.drawing.open_dxf`.
-pub fn open_document(path: &Path, config: DocumentConfig) -> Result<Document> {
+pub fn open_document(path: &Path, config: DocumentConfig, session: &Session) -> Result<Document> {
     let document = Document::open(
         Snapshot::empty(Arc::new(types()?)),
         Arc::new(Evaluators::new()),
@@ -176,31 +165,25 @@ pub fn open_document(path: &Path, config: DocumentConfig) -> Result<Document> {
             serde_json::json!({"path": absolute.to_string_lossy()}),
         )
     };
-    Invoker::new(&commands).invoke(
-        &document,
-        &file_session(parent_of(&absolute), false)?,
-        invocation,
-    )?;
+    Invoker::new(&commands).invoke(&document, session, invocation)?;
     Ok(document)
 }
 
-/// Saves `document` to the DXF file at `path` (which need not exist yet) with
-/// `draftbuilder.drawing.save_dxf`: the native save of the application.
+/// Saves `document` to `path` with `draftbuilder.drawing.save_dxf`: the native save of the
+/// application. The application gives an existing, empty temporary file beside the target; the
+/// command writes it and the application renames it over the target.
 ///
 /// # Errors
-/// The errors of the command; the directory of `path` must exist.
-pub fn save_document(document: &Document, path: &Path) -> Result<()> {
-    let dir = std::fs::canonicalize(parent_of(path))
-        .map_err(|e| arc_base::Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
-    let target = dir.join(path.file_name().unwrap_or_default());
+/// The errors of the command.
+pub fn save_document(document: &Document, path: &Path, session: &Session) -> Result<()> {
     let commands = registry()?;
     let invocation = Invocation {
         seed: fresh_seed(),
         ..Invocation::new(
             save::ID,
-            serde_json::json!({"path": target.to_string_lossy()}),
+            serde_json::json!({"path": path.to_string_lossy()}),
         )
     };
-    Invoker::new(&commands).invoke(document, &file_session(&dir, true)?, invocation)?;
+    Invoker::new(&commands).invoke(document, session, invocation)?;
     Ok(())
 }

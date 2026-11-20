@@ -173,6 +173,78 @@ impl Creator {
         )
     }
 
+    /// Copies the entity `source` into the drawing: a new identifier, the stored values of the
+    /// source (its layer, its appearance and every field of its kind), its owner, and a draw order
+    /// above the entities before it. The source is not changed. The caller has refused the kinds
+    /// that refer to other entities.
+    ///
+    /// # Errors
+    ///
+    /// `draft.object.wrong_type` for `source` when it names no entity, `db.cmd.limit_exceeded`
+    /// when the draw order cannot take another entity, and the errors of the transaction.
+    pub(crate) fn copy_of(&mut self, ctx: &mut Context<'_>, source: ObjectId) -> Result<ObjectId> {
+        let snapshot = ctx.snapshot().clone();
+        let key = crate::modify::entity_key(&snapshot, source)?;
+        let object = snapshot.get(snapshot.resolve(source)?)?;
+        let mut values = object.values.clone();
+        set(
+            &mut values,
+            entity::DRAW_ORDER,
+            Some(Value::I64(self.next_order)),
+        );
+        self.next_order = self
+            .next_order
+            .checked_add(ORDER_STEP)
+            .ok_or_else(|| Error::new(codes::LIMIT_EXCEEDED))?;
+        let id: ObjectId = ctx.new_id();
+        let header = Header {
+            owner: object.header.owner,
+            ..Header::default()
+        };
+        ctx.txn()?.create_copy(source, &key, id, header, values)?;
+        self.ids.push(IdParam(id));
+        Ok(id)
+    }
+
+    /// Adds an entity of `key` created from `values` as they are (its layer, its draw order and its
+    /// fields are the caller's), owned by `owner`. Used for the pieces of a changed geometry, whose
+    /// kind may differ from the source's.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the transaction, and `db.cmd.limit_exceeded` when the draw order is spent.
+    pub(crate) fn add_values(
+        &mut self,
+        ctx: &mut Context<'_>,
+        key: &str,
+        owner: Option<ObjectId>,
+        values: Vec<Option<Value>>,
+    ) -> Result<ObjectId> {
+        let mut values = values;
+        set(
+            &mut values,
+            entity::DRAW_ORDER,
+            Some(Value::I64(self.next_order)),
+        );
+        self.next_order = self
+            .next_order
+            .checked_add(ORDER_STEP)
+            .ok_or_else(|| Error::new(codes::LIMIT_EXCEEDED))?;
+        let id: ObjectId = ctx.new_id();
+        let header = Header {
+            owner,
+            ..Header::default()
+        };
+        ctx.txn()?.create(key, id, header, values)?;
+        self.ids.push(IdParam(id));
+        Ok(id)
+    }
+
+    /// The identifiers the creator made, in creation order.
+    pub(crate) fn into_ids(self) -> Vec<ObjectId> {
+        self.ids.into_iter().map(|id| id.0).collect()
+    }
+
     /// Ends the command: the created entities become the selection after it. Returns them.
     pub(crate) fn finish(self, ctx: &mut Context<'_>) -> Created {
         ctx.set_selection_after(self.ids.iter().map(|id| id.0).collect());

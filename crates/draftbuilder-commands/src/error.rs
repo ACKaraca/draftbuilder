@@ -139,6 +139,56 @@ pub mod codes {
         category: Category::Conflict,
         message_id: "db-cmd-layer-preserved",
     };
+    /// A copy would refer to another entity (a dimension, a hatch boundary, a path array's path),
+    /// which a copy does not carry along.
+    pub const COPY_ASSOCIATED: ErrorCode = ErrorCode {
+        code: "db.cmd.copy_associated",
+        category: Category::Unsupported,
+        message_id: "db-cmd-copy-associated",
+    };
+    /// The entity has no curve of its own (a point, a text, a dimension) where the command needs one.
+    pub const GEOMETRY_UNSUPPORTED: ErrorCode = ErrorCode {
+        code: "db.cmd.geometry_unsupported",
+        category: Category::Unsupported,
+        message_id: "db-cmd-geometry-unsupported",
+    };
+    /// An entity that is not selected refers to an entity that the command erases.
+    pub const ERASE_DEPENDENT: ErrorCode = ErrorCode {
+        code: "db.cmd.erase_dependent",
+        category: Category::Conflict,
+        message_id: "db-cmd-erase-dependent",
+    };
+    /// The command cannot decompose the entity's kind (the foundation has no decomposition for it).
+    pub const EXPLODE_UNSUPPORTED: ErrorCode = ErrorCode {
+        code: "db.cmd.explode_unsupported",
+        category: Category::Unsupported,
+        message_id: "db-cmd-explode-unsupported",
+    };
+    /// The command cannot stretch the entity's kind, because which of its points move is not defined
+    /// for it.
+    pub const STRETCH_UNSUPPORTED: ErrorCode = ErrorCode {
+        code: "db.cmd.stretch_unsupported",
+        category: Category::Unsupported,
+        message_id: "db-cmd-stretch-unsupported",
+    };
+    /// Align pairs do not describe a similarity (a uniform scale, a rotation and a translation).
+    pub const ALIGN_NOT_SIMILARITY: ErrorCode = ErrorCode {
+        code: "db.cmd.align_not_similarity",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-align-not-similarity",
+    };
+    /// A numeric or point value of a modify command is missing, or two alternatives were given.
+    pub const PARAMS_CONFLICT: ErrorCode = ErrorCode {
+        code: "db.cmd.params_conflict",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-params-conflict",
+    };
+    /// A pick point or edge of a modify command names no part of the entity it should change.
+    pub const PICK_INVALID: ErrorCode = ErrorCode {
+        code: "db.cmd.pick_invalid",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-pick-invalid",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         DRAWING_NOT_EMPTY,
@@ -162,6 +212,14 @@ pub mod codes {
         NO_SOLUTION,
         NOTHING_TO_UNDO,
         TANGENT_OBJECT,
+        COPY_ASSOCIATED,
+        GEOMETRY_UNSUPPORTED,
+        ERASE_DEPENDENT,
+        EXPLODE_UNSUPPORTED,
+        STRETCH_UNSUPPORTED,
+        ALIGN_NOT_SIMILARITY,
+        PARAMS_CONFLICT,
+        PICK_INVALID,
     ];
 }
 

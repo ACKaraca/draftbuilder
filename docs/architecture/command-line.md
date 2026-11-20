@@ -114,11 +114,13 @@ prompt form. Alias files in the conventional PGP format are imported and exporte
 text file. Collisions between an alias and a command name are reported when the file loads.
 
 As implemented: `draftbuilder-commands` keeps the product's typed names and short aliases in one table
-(`vocabulary`); `names` reads the prefixes `_`, `-` and `.` and resolves the name through the registry.
-The CLI `run` subcommand accepts every form. The automation protocol passes a command name to
-`arc-command` unchanged, and `arc-command` has no hook for the prefixes, so the protocol accepts
-identifiers, typed names and aliases, not the prefixed forms. Closing that gap needs a name hook in
-`arc-command`.
+(`vocabulary`) and registers one name resolver (`names::resolver`, installed by `registry()`). The
+resolver reads the prefixes `_` (the English name: a vocabulary name or an identifier), `-` (the prompt
+form; flag `no_dialogs`) and `.` (the built-in command; flag `builtin_only`, so user aliases are never
+consulted). Because the registry consults the resolver on every surface, the command line, the
+automation protocol, macros, scripts and the CLI `run` subcommand read the same forms; the CLI has no
+rewriting of its own. Commands read the flags with `Context::name_flags`; none opens a dialog yet, so
+none reads `no_dialogs`.
 
 ## Autocomplete and search
 

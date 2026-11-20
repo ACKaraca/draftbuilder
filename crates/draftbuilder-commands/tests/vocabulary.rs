@@ -13,7 +13,8 @@ use draftbuilder_commands::names::{Form, complete_line, parse, resolve, resolve_
 use draftbuilder_commands::registry;
 use draftbuilder_commands::vocabulary::NAMES;
 
-const MOVE: &str = "core.draft.entity.transform";
+const MOVE: &str = "draftbuilder.modify.move";
+const RAW_MOVE: &str = "core.draft.entity.transform";
 const OPEN: &str = "draftbuilder.drawing.open";
 
 fn product() -> Registry {
@@ -45,12 +46,13 @@ fn every_name_form_of_an_existing_command_resolves_to_it() {
         ".MOVE",
         ".move",
         ".M",
-        "_core.draft.entity.transform",
-        "-core.draft.entity.transform",
-        ".core.draft.entity.transform",
-        "core.draft.entity.transform",
+        "_draftbuilder.modify.move",
+        "-draftbuilder.modify.move",
+        ".draftbuilder.modify.move",
+        "draftbuilder.modify.move",
     ];
     assert_resolves(&registry, &move_forms, MOVE);
+    assert_resolves(&registry, &["core.draft.entity.transform"], RAW_MOVE);
     let open_forms = [
         "OPEN",
         "open",
@@ -97,7 +99,11 @@ fn the_built_in_form_ignores_names_added_at_run_time() {
     let mut registry = product();
     registry.add_user_alias("zap", MOVE).unwrap();
     assert_eq!(resolve(&registry, "zap").unwrap().id, MOVE);
-    assert_eq!(resolve(&registry, "_zap").unwrap().id, MOVE);
+    // The English and built-in forms read the vocabulary and the identifiers, never a user alias.
+    assert_eq!(
+        resolve(&registry, "_zap").unwrap_err().code(),
+        "cmd.unknown"
+    );
     assert_eq!(
         resolve(&registry, ".zap").unwrap_err().code(),
         "cmd.unknown"

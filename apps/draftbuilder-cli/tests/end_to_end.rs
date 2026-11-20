@@ -163,7 +163,7 @@ fn open_move_undo_save_through_the_shared_runner() {
     assert!(ids.len() >= 5, "{queried}");
 
     session.run(
-        "move",
+        "core.draft.entity.transform",
         json!({"objects": ids, "transform": {"translation": [25.0, -10.0]}}),
     );
     let moved = session.call(

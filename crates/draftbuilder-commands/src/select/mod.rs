@@ -1,15 +1,13 @@
 //! Selection commands (area `select`): the window, crossing, polygon and fence methods, all, last,
 //! previous, filters and similar selection. Each command computes the set of objects of a space
 //! (the model space by default, or any space or block definition named by `space`) with a pure
-//! function of [`methods`] or [`query`], and returns it combined with the `current` set the caller
-//! passes, by `mode` ([`combine`]).
+//! function of [`methods`] or [`query`], and combines it with the session's current selection by
+//! `mode` ([`combine`]).
 //!
-//! Selection changes no document state: the commands are not undoable, create no undo step and
-//! leave the session selection as it is. The session keeps no current or previous set yet, so the
-//! caller passes the current set explicitly for `add`, `remove` and `within_current`, and the
-//! previous set explicitly to `previous`. Previous across commands is not available until the
-//! foundation keeps session selection state (see the architecture overview). The pick, highlight,
-//! pointer gestures, grips and the prompt machine are not part of this module.
+//! The result becomes the session's selection through `Context::set_selection`: the current set
+//! becomes the previous one, which `draftbuilder.select.previous` reads. Selection changes no
+//! document state: the commands are read-only, create no undo step and no journal record. The
+//! pick, highlight, pointer gestures, grips and the prompt machine are not part of this module.
 
 pub mod candidates;
 pub mod cycle;
@@ -31,7 +29,7 @@ use crate::vocabulary::{Area, register_names};
 use candidates::{Options, Pick};
 use query::{Filter, Property, Read};
 
-/// How a selection combines with the current set the caller passes.
+/// How a selection combines with the session's current selection.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
@@ -55,9 +53,6 @@ pub struct Rectangle {
     /// The space or block definition searched; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with.
-    #[serde(default)]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -76,9 +71,6 @@ pub struct Vertices {
     /// The space or block definition searched; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with.
-    #[serde(default)]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -94,9 +86,6 @@ pub struct Everything {
     /// The space or block definition searched; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with.
-    #[serde(default)]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -109,18 +98,9 @@ pub struct Everything {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Previous {
-    /// The previous set. Objects that are not selectable in `space` under the rules (frozen, off,
-    /// invisible, locked, not an entity of the space, or gone) are left out.
-    #[serde(default)]
-    #[schemars(length(max = 10000))]
-    pub previous: Vec<IdParam>,
     /// The space or block definition the set is checked against; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with.
-    #[serde(default)]
-    #[schemars(length(max = 10000))]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -138,15 +118,12 @@ pub struct FilterParams {
     /// Selects the objects that do not satisfy the filter.
     #[serde(default)]
     pub invert: bool,
-    /// Tests only the objects of `current`.
+    /// Tests only the objects of the session's current selection.
     #[serde(default)]
     pub within_current: bool,
     /// The space or block definition searched; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with, and that `within_current` restricts to.
-    #[serde(default)]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -168,9 +145,6 @@ pub struct Similar {
     /// The space or block definition searched; the model space when absent.
     #[serde(default)]
     pub space: Option<IdParam>,
-    /// The current set that `mode` combines with.
-    #[serde(default)]
-    pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
@@ -292,123 +266,170 @@ fn finish(snapshot: &Snapshot, current: &[ObjectId], pick: Pick, mode: Mode) -> 
     }
 }
 
+/// The session's current selection: the set `mode` combines with, and `within_current` restricts to.
+/// The session holds it (the invocation's own list is the caller's, not the session's).
+fn current_of(ctx: &Context<'_>) -> Vec<ObjectId> {
+    ctx.session().current_selection(ctx.snapshot())
+}
+
+/// Makes the picked set the session's selection (the current set becomes the previous one) and
+/// returns it. A selection is session state: no journal record and no undo step.
+fn commit(ctx: &mut Context<'_>, picked: Picked) -> Result<Picked> {
+    ctx.set_selection(picked.objects.iter().map(|IdParam(id)| *id).collect())?;
+    Ok(picked)
+}
+
 fn rectangle(ctx: &mut Context<'_>, p: Rectangle) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let corners = [
-        Point2::new(p.first[0], p.first[1]),
-        Point2::new(p.second[0], p.second[1]),
-    ];
-    let pick = methods::select_window(snapshot, space, corners, &options(p.include_locked))?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let corners = [
+            Point2::new(p.first[0], p.first[1]),
+            Point2::new(p.second[0], p.second[1]),
+        ];
+        let pick = methods::select_window(snapshot, space, corners, &options(p.include_locked))?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn crossing(ctx: &mut Context<'_>, p: Rectangle) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let corners = [
-        Point2::new(p.first[0], p.first[1]),
-        Point2::new(p.second[0], p.second[1]),
-    ];
-    let pick = methods::select_crossing(snapshot, space, corners, &options(p.include_locked))?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let corners = [
+            Point2::new(p.first[0], p.first[1]),
+            Point2::new(p.second[0], p.second[1]),
+        ];
+        let pick = methods::select_crossing(snapshot, space, corners, &options(p.include_locked))?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn window_polygon(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_window_polygon(
-        snapshot,
-        space,
-        &points(&p.points),
-        &options(p.include_locked),
-    )?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let pick = methods::select_window_polygon(
+            snapshot,
+            space,
+            &points(&p.points),
+            &options(p.include_locked),
+        )?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn crossing_polygon(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_crossing_polygon(
-        snapshot,
-        space,
-        &points(&p.points),
-        &options(p.include_locked),
-    )?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let pick = methods::select_crossing_polygon(
+            snapshot,
+            space,
+            &points(&p.points),
+            &options(p.include_locked),
+        )?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn fence(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_fence(
-        snapshot,
-        space,
-        &points(&p.points),
-        &options(p.include_locked),
-    )?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let pick = methods::select_fence(
+            snapshot,
+            space,
+            &points(&p.points),
+            &options(p.include_locked),
+        )?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn all(ctx: &mut Context<'_>, p: Everything) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_all(snapshot, space, &options(p.include_locked))?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let pick = methods::select_all(snapshot, space, &options(p.include_locked))?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn last(ctx: &mut Context<'_>, p: Everything) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_last(snapshot, space, &options(p.include_locked))?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let pick = methods::select_last(snapshot, space, &options(p.include_locked))?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
+/// The previous selection of the session, as the session kept it before the last selection.
 fn previous(ctx: &mut Context<'_>, p: Previous) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let previous = take(ctx, &p.previous)?;
-    let current = take(ctx, &p.current)?;
-    let pick = methods::select_previous(snapshot, space, &previous, &options(p.include_locked))?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let previous = ctx.session().previous_selection(snapshot);
+        let pick =
+            methods::select_previous(snapshot, space, &previous, &options(p.include_locked))?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn filter(ctx: &mut Context<'_>, p: FilterParams) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let within = p.within_current.then(|| live(snapshot, &current));
-    let pick = query::select_query(
-        snapshot,
-        space,
-        &p.filter,
-        p.invert,
-        within.as_deref(),
-        &options(p.include_locked),
-    )?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let current = current_of(ctx);
+        let within = p.within_current.then(|| current.clone());
+        let pick = query::select_query(
+            snapshot,
+            space,
+            &p.filter,
+            p.invert,
+            within.as_deref(),
+            &options(p.include_locked),
+        )?;
+        finish(snapshot, &current, pick, p.mode)
+    };
+    commit(ctx, picked)
 }
 
 fn similar(ctx: &mut Context<'_>, p: Similar) -> Result<Picked> {
-    let snapshot = ctx.snapshot();
-    let space = space_of(snapshot, p.space)?;
-    let current = take(ctx, &p.current)?;
-    let objects = take(ctx, &p.objects)?;
-    let pick = query::select_similar(
-        snapshot,
-        space,
-        &objects,
-        &p.properties,
-        &options(p.include_locked),
-    )?;
-    Ok(finish(snapshot, &current, pick, p.mode))
+    let picked = {
+        let snapshot = ctx.snapshot();
+        let space = space_of(snapshot, p.space)?;
+        let objects = take(ctx, &p.objects)?;
+        let pick = query::select_similar(
+            snapshot,
+            space,
+            &objects,
+            &p.properties,
+            &options(p.include_locked),
+        )?;
+        finish(snapshot, &current_of(ctx), pick, p.mode)
+    };
+    commit(ctx, picked)
+}
+
+/// The topmost object of the model space in draw order: the product's answer for the keyword
+/// `last` of object parameters (see [`crate::with_hooks`]). Empty when the drawing has no model
+/// space or no selectable object.
+#[must_use]
+pub fn last_objects(snapshot: &Snapshot) -> Vec<ObjectId> {
+    crate::model_space(snapshot)
+        .and_then(|space| methods::select_last(snapshot, space, &options(false)).ok())
+        .map(|pick| pick.ids)
+        .unwrap_or_default()
 }
 
 /// Registers one selection command: read-only, so it creates no undo step and changes no

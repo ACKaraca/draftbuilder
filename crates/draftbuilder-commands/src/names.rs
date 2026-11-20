@@ -1,33 +1,31 @@
 //! Name forms of a typed command (DB-CMD-014 and DB-CMD-013): the prefixes that select how a
-//! typed name is read, resolved and completed.
+//! typed name is read.
 //!
-//! The name itself is resolved by arc-command's [`Registry::resolve`] (identifier, deprecated
-//! alias, user alias, localized name) and completed by [`arc_command::complete`]; this module only
-//! strips the prefix and decides what the prefix asks for:
+//! The product registers one name resolver ([`resolver`]) with the registry, so every surface
+//! that resolves names (the command line, the protocol, macros, scripts and the CLI) reads the
+//! prefixes the same way:
 //!
-//! - no prefix: the typed name, as resolved by the registry;
-//! - `_NAME`: the English name. The product has one catalog, so the localized names are not
-//!   consulted;
-//! - `-NAME`: the prompt form. The product's commands never open a dialog, so the form runs the
-//!   same command; the form is reported so that a command line can start the prompt machine;
-//! - `.NAME`: the built-in command. Only identifiers and the names of [`crate::vocabulary`] are
-//!   consulted, never the user aliases a script or an alias file adds at run time.
+//! - no prefix: the registry's own rules (identifier, alias, localized name); the resolver does
+//!   not answer;
+//! - `_NAME`: the English name, a row of [`crate::vocabulary`] or an identifier; no flags;
+//! - `-NAME`: the prompt form; the flag `no_dialogs` is set, since the product's commands never
+//!   open a dialog and the prompt machine is the interactive form;
+//! - `.NAME`: the built-in command, a row of the vocabulary or an identifier, never a user alias
+//!   a script or an alias file added at run time; the flag `builtin_only` is set.
 //!
-//! [`resolve`] is used by the CLI `run` subcommand, and [`complete_line`] is the completion for a
-//! command line. The automation protocol passes a command name to arc-command unchanged, and arc-command has no
-//! hook for the prefixes, so the protocol accepts identifiers, typed names and aliases only (see
-//! `docs/architecture/command-line.md`).
+//! The commands read these flags with `Context::name_flags`. No command opens a dialog today, so
+//! none reads `no_dialogs` yet.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arc_base::{Error, Result};
-use arc_command::Registry;
 use arc_command::error::codes;
-use arc_command::line::{Completion, complete};
+use arc_command::line::{CandidateKind, Completion, complete};
+use arc_command::{NameFlags, NameMatch, NameResolver, Registry};
 
 use crate::vocabulary::NAMES;
 
-/// How a typed name asks to be read.
+/// The form a typed name was written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Form {
     /// No prefix.
@@ -40,20 +38,7 @@ pub enum Form {
     Builtin,
 }
 
-impl Form {
-    /// The prefix character of the form, `None` for the typed name.
-    #[must_use]
-    pub fn prefix(self) -> Option<char> {
-        match self {
-            Self::Typed => None,
-            Self::English => Some('_'),
-            Self::Prompt => Some('-'),
-            Self::Builtin => Some('.'),
-        }
-    }
-}
-
-/// The form and the name of a typed text, the prefix removed.
+/// The form and the name of a typed text, with surrounding whitespace and the prefix removed.
 #[must_use]
 pub fn parse(text: &str) -> (Form, &str) {
     let text = text.trim();
@@ -63,9 +48,9 @@ pub fn parse(text: &str) -> (Form, &str) {
         Some('.') => Form::Builtin,
         _ => Form::Typed,
     };
-    let name = match form.prefix() {
-        Some(_) => text.get(1..).unwrap_or(""),
-        None => text,
+    let name = match form {
+        Form::Typed => text,
+        _ => text.get(1..).unwrap_or(""),
     };
     (form, name)
 }
@@ -79,24 +64,20 @@ pub struct Resolution {
     pub id: String,
 }
 
-fn unknown(name: &str) -> Error {
-    Error::new(codes::UNKNOWN).with_detail("name", name)
-}
-
-/// Resolves a typed name, with its prefix, to a registered command.
+/// Resolves a typed name, with its prefix, through the registry (and so through the product's
+/// resolver).
 ///
 /// # Errors
-/// `cmd.unknown` (detail `name`, the name without its prefix) when no command has the name, and
-/// the errors of [`Registry::resolve`] (`cmd.name.ambiguous`).
+///
+/// As [`Registry::resolve`]: `cmd.unknown` when no command has the name.
 pub fn resolve(registry: &Registry, text: &str) -> Result<Resolution> {
     resolve_with(registry, &BTreeMap::new(), text)
 }
 
-/// Resolves a typed name as [`resolve`], with the localized names of the active catalog (identifier
-/// to localized name). A localized name shared by several commands is `cmd.name.ambiguous`. The
-/// built-in form does not consult localized names.
+/// Resolves a typed name as [`resolve`], with the localized names of the active catalog.
 ///
 /// # Errors
+///
 /// As [`resolve`], and `cmd.name.ambiguous` for a localized name that several commands share.
 pub fn resolve_with(
     registry: &Registry,
@@ -105,39 +86,18 @@ pub fn resolve_with(
 ) -> Result<Resolution> {
     let (form, name) = parse(text);
     if name.is_empty() {
-        return Err(unknown(name));
+        return Err(Error::new(codes::UNKNOWN).with_detail("name", name));
     }
-    let id = match form {
-        Form::Builtin => builtin(registry, name).ok_or_else(|| unknown(name))?,
-        Form::Typed | Form::English | Form::Prompt => {
-            registry.resolve(name, localized)?.spec.id().to_owned()
-        }
-    };
-    Ok(Resolution { form, id })
+    let resolved = registry.resolve(text.trim(), localized)?;
+    Ok(Resolution {
+        form,
+        id: resolved.spec.id().to_owned(),
+    })
 }
 
-/// The identifier a built-in name stands for: a registered identifier, or a row of the
-/// vocabulary whose typed name or alias is the name (ASCII case ignored).
-fn builtin(registry: &Registry, name: &str) -> Option<String> {
-    let lower = name.to_ascii_lowercase();
-    if registry.get(&lower).is_some() {
-        return Some(lower);
-    }
-    NAMES
-        .iter()
-        .find(|row| {
-            row.typed
-                .into_iter()
-                .chain(row.aliases.iter().copied())
-                .any(|n| n.eq_ignore_ascii_case(name))
-        })
-        .filter(|row| registry.get(row.id).is_some())
-        .map(|row| row.id.to_owned())
-}
-
-/// Completes a typed line as [`resolve`] reads it: surrounding whitespace is ignored, and a first
-/// word with a prefix keeps the prefix in its command candidates. The built-in form offers only the
-/// names it resolves (identifiers and vocabulary names), never the user aliases a script added.
+/// Completes a typed line as the registry reads it: surrounding whitespace is ignored, and a first
+/// word with a prefix keeps the prefix on its command candidates. The built-in form offers only
+/// the names it resolves (identifiers and vocabulary names), never a user alias.
 #[must_use]
 pub fn complete_line(registry: &Registry, text: &str, cursor: usize) -> Completion {
     let lead = text.len() - text.trim_start().len();
@@ -149,31 +109,28 @@ pub fn complete_line(registry: &Registry, text: &str, cursor: usize) -> Completi
         shift(&mut out, lead);
         return out;
     };
-    let shift_by = prefix.len_utf8();
-    let inner = text.get(shift_by..).unwrap_or("");
+    let width = prefix.len_utf8();
     let mut out = complete(
         registry,
         &BTreeMap::new(),
-        inner,
-        cursor.saturating_sub(shift_by),
+        text.get(width..).unwrap_or(""),
+        cursor.saturating_sub(width),
     );
-    // A span that starts at the first word keeps the prefix in the range it replaces, since the
-    // command candidates written back carry it.
     if let Some(span) = out.span.as_mut() {
         if span.start > 0 {
-            span.start += shift_by;
+            span.start += width;
         }
-        span.end += shift_by;
+        span.end += width;
     }
     for candidate in &mut out.candidates {
-        if candidate.kind == arc_command::line::CandidateKind::Command {
+        if candidate.kind == CandidateKind::Command {
             candidate.text.insert(0, prefix);
         }
     }
     if prefix == '.' {
         out.candidates.retain(|c| {
-            c.kind != arc_command::line::CandidateKind::Command
-                || builtin(registry, c.text.get(1..).unwrap_or("")).is_some()
+            c.kind != CandidateKind::Command
+                || resolve(registry, &c.text).is_ok_and(|r| r.form == Form::Builtin)
         });
     }
     shift(&mut out, lead);
@@ -185,5 +142,77 @@ fn shift(out: &mut Completion, by: usize) {
     if let Some(span) = out.span.as_mut() {
         span.start += by;
         span.end += by;
+    }
+}
+
+/// The prefix characters the product reads, with the flags each one sets.
+fn prefix_flags(prefix: char) -> Option<NameFlags> {
+    match prefix {
+        '_' => Some(NameFlags::default()),
+        '-' => Some(NameFlags {
+            no_dialogs: true,
+            builtin_only: false,
+        }),
+        '.' => Some(NameFlags {
+            no_dialogs: false,
+            builtin_only: true,
+        }),
+        _ => None,
+    }
+}
+
+/// The resolver of the product for `registry`: the vocabulary's typed names and aliases, and the
+/// identifiers, of the commands the registry holds. It answers only the prefixed forms.
+///
+/// Build it after every command and vocabulary row is registered; it names no command the
+/// registry lacks.
+#[must_use]
+pub fn resolver(registry: &Registry) -> NameResolver {
+    let mut typed: BTreeMap<String, String> = BTreeMap::new();
+    for row in NAMES {
+        if registry.get(row.id).is_none() {
+            continue;
+        }
+        for name in row.typed.into_iter().chain(row.aliases.iter().copied()) {
+            typed.insert(name.to_ascii_lowercase(), row.id.to_owned());
+        }
+    }
+    let identifiers: BTreeSet<String> = registry.iter().map(|spec| spec.id().to_owned()).collect();
+    NameResolver::new(move |name| {
+        let mut chars = name.chars();
+        let flags = prefix_flags(chars.next()?)?;
+        let rest = chars.as_str().to_ascii_lowercase();
+        if rest.is_empty() {
+            return None;
+        }
+        let command = if identifiers.contains(&rest) {
+            rest
+        } else {
+            typed.get(&rest)?.clone()
+        };
+        Some(NameMatch { command, flags })
+    })
+}
+
+/// Installs the product's name resolver on `registry`.
+///
+/// # Errors
+///
+/// `cmd.duplicate` when the registry already has a resolver whose aliases conflict.
+pub fn install(registry: &mut Registry) -> Result<()> {
+    let resolver = resolver(registry);
+    registry.set_name_resolver(resolver)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefix_flags;
+
+    #[test]
+    fn each_prefix_sets_its_flags() {
+        assert!(prefix_flags('_').is_some_and(|f| !f.no_dialogs && !f.builtin_only));
+        assert!(prefix_flags('-').is_some_and(|f| f.no_dialogs && !f.builtin_only));
+        assert!(prefix_flags('.').is_some_and(|f| f.builtin_only));
+        assert!(prefix_flags('m').is_none());
     }
 }

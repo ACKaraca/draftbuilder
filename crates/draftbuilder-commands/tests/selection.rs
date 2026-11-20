@@ -13,6 +13,7 @@ mod common;
 
 use std::collections::BTreeSet;
 
+use arc_base::ObjectId;
 use common::Env;
 use serde_json::{Value, json};
 
@@ -123,15 +124,39 @@ fn crossing(env: &mut Env) -> Value {
     )
 }
 
-/// Runs a selection command with `current` as its explicit current set.
+/// Makes `ids` the session's current selection; the one that was current becomes the previous one.
+/// This is the session state a selection command reads and sets.
+fn set_current(env: &mut Env, ids: &[&str]) {
+    let snapshot = env.document.snapshot();
+    let ids: Vec<ObjectId> = ids.iter().map(|id| id.parse().unwrap()).collect();
+    env.session.record_selection(&ids, &snapshot).unwrap();
+}
+
+/// Makes `ids` the session's previous selection (through a current set that is cleared after).
+fn set_previous(env: &mut Env, ids: &[&str]) {
+    set_current(env, ids);
+    set_current(env, &[]);
+}
+
+/// Runs a selection command with `current` as the session's current selection.
 fn run_with_selection(
     env: &mut Env,
     command: &str,
-    mut params: Value,
+    params: Value,
     current: &[&str],
 ) -> Result<Value, arc_base::Error> {
-    params["current"] = json!(current);
+    set_current(env, current);
     env.invoke(command, params)
+}
+
+/// The identifier texts of the `objects` of a selection result.
+fn ids_of(result: &Value) -> Vec<String> {
+    result["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
@@ -302,9 +327,10 @@ fn previous_returns_the_set_the_caller_passes_and_drops_unknown_identifiers() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let picked = crossing(&mut env);
-    // The caller records the crossing set and passes it back: previous is explicit.
-    let objects: Vec<Value> = picked["objects"].as_array().unwrap().clone();
-    let previous = env.run("draftbuilder.select.previous", json!({"previous": objects}));
+    // The crossing set becomes the previous selection once a later selection replaces it.
+    set_current(&mut env, &[]);
+    assert_eq!(ids_of(&picked).len(), 6, "{picked}");
+    let previous = env.run("draftbuilder.select.previous", json!({}));
     assert_eq!(
         names(&previous),
         set(&[&f.a, &f.b, &f.d, &f.e, &f.f, &f.g]),
@@ -312,16 +338,16 @@ fn previous_returns_the_set_the_caller_passes_and_drops_unknown_identifiers() {
     );
     // Identifiers that name no object are dropped.
     let unknown = "00000000-0000-0000-0000-000000000001";
-    let with_unknown = env.run(
-        "draftbuilder.select.previous",
-        json!({"previous": [f.a.clone(), unknown]}),
-    );
+    set_previous(&mut env, &[&f.a, unknown]);
+    let with_unknown = env.run("draftbuilder.select.previous", json!({}));
     assert_eq!(names(&with_unknown), set(&[&f.a]), "{with_unknown}");
     // Previous combines with the current set by mode, as the other methods do.
+    // a is the current set now; the run below makes g the current set and a the previous one.
+    set_current(&mut env, &[&f.a]);
     let added = run_with_selection(
         &mut env,
         "draftbuilder.select.previous",
-        json!({"previous": [f.a.clone()], "mode": "add"}),
+        json!({"mode": "add"}),
         &[&f.g],
     )
     .unwrap();
@@ -332,13 +358,13 @@ fn previous_returns_the_set_the_caller_passes_and_drops_unknown_identifiers() {
 fn previous_drops_an_object_that_was_erased() {
     let mut env = Env::new();
     let f = fixture(&mut env);
-    let picked = window(&mut env);
+    let _picked = window(&mut env);
     env.run(
         "core.draft.entity.delete",
         json!({"objects": [f.d.clone()]}),
     );
-    let objects: Vec<Value> = picked["objects"].as_array().unwrap().clone();
-    let previous = env.run("draftbuilder.select.previous", json!({"previous": objects}));
+    set_current(&mut env, &[]);
+    let previous = env.run("draftbuilder.select.previous", json!({}));
     assert_eq!(names(&previous), set(&[&f.a, &f.f, &f.g]), "{previous}");
 }
 
@@ -587,10 +613,8 @@ fn previous_keeps_only_what_the_selection_rules_allow_in_its_order() {
         "core.draft.entity.modify",
         json!({"objects": [f.g.clone()], "field": "visible", "value": false}),
     );
-    let previous = env.run(
-        "draftbuilder.select.previous",
-        json!({"previous": [f.b.clone(), f.d.clone(), f.a.clone(), f.g.clone(), frozen, f.f.clone(), f.a.clone()]}),
-    );
+    set_previous(&mut env, &[&f.b, &f.d, &f.a, &f.g, &frozen, &f.f, &f.a]);
+    let previous = env.run("draftbuilder.select.previous", json!({}));
     // In the order given, each once: b, a, f. The frozen d, the invisible g and the layer are out.
     assert_eq!(
         previous["objects"],
@@ -604,14 +628,13 @@ fn previous_keeps_only_what_the_selection_rules_allow_in_its_order() {
         json!({"objects": [f.a.clone()], "layer": "Lk"}),
     );
     env.run("draftbuilder.layer.lock", json!({"objects": [f.a.clone()]}));
-    let without = env.run(
-        "draftbuilder.select.previous",
-        json!({"previous": [f.a.clone(), f.f.clone()]}),
-    );
+    set_previous(&mut env, &[&f.a, &f.f]);
+    let without = env.run("draftbuilder.select.previous", json!({}));
     assert_eq!(names(&without), set(&[&f.f]), "{without}");
+    set_previous(&mut env, &[&f.a, &f.f]);
     let with = env.run(
         "draftbuilder.select.previous",
-        json!({"previous": [f.a.clone(), f.f.clone()], "include_locked": true}),
+        json!({"include_locked": true}),
     );
     assert_eq!(names(&with), set(&[&f.a, &f.f]), "{with}");
 }
@@ -640,19 +663,16 @@ fn a_zero_width_or_zero_height_window_is_refused_with_its_code() {
 }
 
 #[test]
-fn the_current_set_is_limited_and_the_limit_is_named() {
+fn the_session_selection_is_limited_and_the_limit_is_named() {
     let mut env = Env::new();
     fixture(&mut env);
-    let too_many: Vec<String> = (0..10_001)
-        .map(|i| format!("00000000-0000-0000-0000-{i:012x}"))
+    env.session.limits.array_length = 2;
+    let snapshot = env.document.snapshot();
+    let ids: Vec<ObjectId> = (1..=3)
+        .map(|i| format!("00000000-0000-0000-0000-{i:012x}").parse().unwrap())
         .collect();
-    let error = env
-        .invoke(
-            "draftbuilder.select.window",
-            json!({"first": WINDOW_FIRST, "second": WINDOW_SECOND, "current": too_many}),
-        )
-        .unwrap_err();
-    assert_eq!(error.code(), "db.cmd.limit_exceeded", "{error:?}");
+    let error = env.session.record_selection(&ids, &snapshot).unwrap_err();
+    assert_eq!(error.code(), "cmd.params.limit_exceeded", "{error:?}");
 }
 
 #[test]

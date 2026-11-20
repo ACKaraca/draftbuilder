@@ -108,22 +108,19 @@ fn check_regular_target(path: &Path) -> Result<()> {
 /// Writes `bytes` to `path` through a temporary file beside it, then replaces `path` with it.
 ///
 /// The target is checked against the write roots and must be a regular file or absent. The
-/// temporary file is created exclusively through the session's roots, under a short name with a
-/// random part, so a name planted in advance is never opened. It takes the permissions of the file
-/// it replaces, is synced before the rename, and the directory is synced after it on Unix. On
-/// failure the temporary file is removed and `path` keeps what it held.
+/// temporary file is created exclusively with `Context::create_new`, under a short name with a
+/// random part, written, synced and closed; it takes the permissions of the file it replaces,
+/// then `Context::replace_file` renames it over the target. The directory is synced after the
+/// rename on Unix. On failure the temporary file is removed and `path` keeps what it held.
 ///
-/// shortcut: the exclusive create is the roots' reservation followed by a reopen of that placeholder,
-/// so a link swapped in between is followed; the foundation has no exclusive create on the command
-/// context, see the report, upgrade when it has one.
+/// When the command is the native save of the application, `path` is the empty temporary file the
+/// application created beside its target; this writes that file, and the application renames it
+/// over the target. The application does not carry the target's permissions over, so a native
+/// save takes the permissions of its temporary file.
 fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     check_regular_target(path)?;
     ctx.session().roots.check_write(path)?;
-    if !ctx.session().permissions.contains(&Permission::FileWrite) {
-        return Err(Error::new(arc_command::error::codes::PERMISSION_DENIED)
-            .with_detail("permission", "file_write"));
-    }
     let name = format!(
         ".draftbuilder-{:x}-{:016x}-{}.tmp",
         std::process::id(),
@@ -131,30 +128,22 @@ fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<()> {
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
     let temp_path = path.with_file_name(name);
-    let temp = ctx.session().roots.reserve(&temp_path)?;
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&temp)
-            .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
-        file.write_all(bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
-        drop(file);
-        if let Ok(meta) = std::fs::metadata(path) {
-            std::fs::set_permissions(&temp, meta.permissions())
+        {
+            let mut file = ctx.create_new(&temp_path)?;
+            file.write_all(bytes)
+                .and_then(|()| file.sync_all())
                 .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
         }
-        std::fs::rename(&temp, path).map_err(|e| {
-            Error::new(arc_command::error::codes::PATH_IO)
-                .with_detail("reason", "rename")
-                .with_source(e)
-        })?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::fs::set_permissions(&temp_path, meta.permissions())
+                .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+        }
+        ctx.replace_file(&temp_path, path)?;
         sync_parent(path)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
+        let _ = std::fs::remove_file(&temp_path);
     }
     result
 }

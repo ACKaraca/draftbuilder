@@ -241,3 +241,16 @@ pub fn line_handle_at(text: &str, x: f64) -> Option<String> {
         })
         .and_then(|r| handle_of(&r))
 }
+
+/// The curve of an entity of the drawing, decoded from its stored geometry.
+pub fn curve_of_entity(snapshot: &Snapshot, id: ObjectId) -> arc_geom::Curve2 {
+    let handle = snapshot.resolve(id).unwrap();
+    let object = snapshot.get(handle).unwrap();
+    let key = snapshot.type_key(handle).unwrap().as_str().to_owned();
+    match Reader::new(snapshot.registry(), &key, &object.values).get("geometry") {
+        Some(arc_doc::Value::Geometry(bytes)) => {
+            arc_geom::Curve2::decode(&bytes.0, &Limits::DEFAULT).unwrap()
+        }
+        _ => panic!("no geometry"),
+    }
+}

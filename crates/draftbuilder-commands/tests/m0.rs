@@ -224,7 +224,7 @@ fn open_move_undo_save_keeps_the_handles_of_the_source() {
 
     // Move every entity, then undo: the geometry is restored exactly.
     let ids: Vec<String> = objects.iter().map(|(id, _)| id.to_string()).collect();
-    env.run("move", translate(&ids, 25.0, -10.0));
+    env.run("core.draft.entity.transform", translate(&ids, 25.0, -10.0));
     let moved = env.document.snapshot();
     assert_ne!(entities(&moved), objects, "the move changed the geometry");
     assert!(env.document.undo().wait().unwrap().value);
@@ -340,7 +340,7 @@ fn a_saved_move_is_in_the_file_and_the_handles_stay() {
         .iter()
         .map(|(id, _)| id.to_string())
         .collect();
-    env.run("move", translate(&ids, 25.0, -10.0));
+    env.run("core.draft.entity.transform", translate(&ids, 25.0, -10.0));
     env.run(
         "draftbuilder.drawing.save_dxf",
         json!({"path": env.path("moved.dxf")}),
@@ -452,7 +452,7 @@ fn objects_the_move_does_not_handle_are_refused_and_nothing_changes() {
     env.seed += 1;
     let invocation = Invocation {
         seed: env.seed,
-        ..Invocation::new("move", translate(&[space], 1.0, 1.0))
+        ..Invocation::new("core.draft.entity.transform", translate(&[space], 1.0, 1.0))
     };
     let error = Invoker::new(&env.commands)
         .invoke(&env.document, &env.session, invocation)

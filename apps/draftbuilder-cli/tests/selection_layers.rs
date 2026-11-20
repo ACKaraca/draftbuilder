@@ -158,21 +158,17 @@ fn selection_layers_and_properties_run_through_the_protocol() {
     assert_eq!(window["picked"], json!(1), "{window}");
     assert_eq!(ids(&window), sorted(vec![inside.clone()]));
 
-    // Add mode combines the crossing set with the current set the caller passes.
+    // Add mode combines the crossing set with the session's current selection (the window's set).
     let added = session.run(
         "draftbuilder.select.crossing",
-        json!({"first": [14.0, 14.0], "second": [16.0, 16.0], "mode": "add",
-               "current": [inside.clone()]}),
+        json!({"first": [14.0, 14.0], "second": [16.0, 16.0], "mode": "add"}),
     );
     assert_eq!(added["picked"], json!(1), "{added}");
     assert_eq!(ids(&added), sorted(vec![inside.clone(), crossing.clone()]));
 
-    // The previous set is passed explicitly; previous across commands is not available yet.
-    let previous = session.run(
-        "draftbuilder.select.previous",
-        json!({"previous": [crossing.clone()]}),
-    );
-    assert_eq!(previous["objects"], json!([crossing.clone()]), "{previous}");
+    // The previous set is the session's set before the last selection: the window's set.
+    let previous = session.run("draftbuilder.select.previous", json!({}));
+    assert_eq!(previous["objects"], json!([inside.clone()]), "{previous}");
 
     // The typed FILTER name selects by type over the whole drawing.
     let lines = session.run(
