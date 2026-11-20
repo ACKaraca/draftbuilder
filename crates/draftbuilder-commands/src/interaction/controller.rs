@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arc_base::{Error, ObjectId, Result};
+use arc_base::{Error, ObjectId, Result, Tolerance};
 use arc_command::history::{self, Direction};
 use arc_command::prompt::PromptSession;
 use arc_command::{
@@ -17,6 +17,7 @@ use serde_json::Map;
 use super::acquire::{self, Acquire, Taken};
 use super::band;
 use super::fields::Fields;
+use super::gather::{self, Gather, Region, Shape};
 use super::lookup::{self, CommandEntry, Help, Suggestion};
 use super::resolution::{Resolved, Resolver};
 use super::{
@@ -25,8 +26,10 @@ use super::{
 };
 use crate::draw::create::from_meters;
 use crate::draw::create::meters_per_unit;
+use crate::error::codes;
 use crate::precision::points::{self, Modifier};
-use crate::select::{Mode, combine};
+use crate::select::candidates::Options;
+use crate::select::{Mode, combine, methods};
 use crate::settings;
 use crate::settings::store::Values;
 
@@ -79,6 +82,10 @@ pub struct Controller {
     recalled: Option<String>,
     /// The point modifier that waits for points.
     acquire: Acquire,
+    /// The objects a selection prompt gathers and the shape of its next gesture.
+    gather: Gather,
+    /// The identifier of the command the last step ran on, for the history line of one that failed.
+    running: Option<String>,
     seed: u64,
 }
 
@@ -103,6 +110,8 @@ impl Controller {
             recall: None,
             recalled: None,
             acquire: Acquire::Idle,
+            gather: Gather::default(),
+            running: None,
             seed: 1,
         })
     }
@@ -149,7 +158,10 @@ impl Controller {
     /// window or a locked dynamic field.
     #[must_use]
     pub fn busy(&self) -> bool {
-        self.window.is_some() || self.fields.any_locked() || self.acquire.pending()
+        self.window.is_some()
+            || self.fields.any_locked()
+            || self.acquire.pending()
+            || self.gather.pending()
     }
 
     /// The window's state for `document` after the document changed outside the controller (a
@@ -182,6 +194,10 @@ impl Controller {
             Event::Option(id) => self.option(document, id, &mut errors),
             Event::Field { index, text } => self.fields.set(index, text),
             Event::Tab => self.fields.toggle(),
+            Event::ShiftClick { at, aperture } => {
+                self.shift_click(document, at, aperture, picker, &mut errors);
+            }
+            Event::Lasso { path } => self.lasso(document, &path, &mut errors),
             Event::Undo => self.undo(document, &mut errors),
             Event::Redo => self.redo(document, &mut errors),
             Event::RecallPrevious => self.recall_previous(),
@@ -205,6 +221,7 @@ impl Controller {
         document: &Document,
         step: impl FnOnce(&mut CommandLine, &Target<'_>) -> Result<T>,
     ) -> Result<T> {
+        self.running = self.line.active().map(|s| s.command().id().to_owned());
         let snapshot = document.snapshot();
         // Typed numbers take the units of the drawing, as in the script runner; typed points read in
         // the current user coordinate system.
@@ -235,6 +252,10 @@ impl Controller {
             role: LineRole::Input,
             text: text.to_owned(),
         });
+        if let Some(id) = self.selection_keyword(text) {
+            self.select_keyword(document, id, errors);
+            return;
+        }
         if let Some(modifier) = self.typed_modifier(text) {
             self.start_modifier(modifier);
             return;
@@ -247,7 +268,7 @@ impl Controller {
             return;
         }
         let result = self.with_line(document, |line, target| line.submit(target, text));
-        self.settle(result, errors);
+        self.settle(document, result, errors);
     }
 
     /// The empty line: a locked field composes the point, else the prompt takes its default; with
@@ -266,8 +287,18 @@ impl Controller {
                 )));
                 return;
             }
+            if let Shape::Polygon { region, points } = &self.gather.shape {
+                let (region, points) = (*region, points.clone());
+                self.close_polygon(document, region, &points, errors);
+                return;
+            }
+            if self.gather.multiple {
+                let ids = self.gather.ids.clone();
+                self.answer(document, PromptInput::Selection(ids), errors);
+                return;
+            }
             let result = self.with_line(document, |line, target| line.submit(target, ""));
-            self.settle(result, errors);
+            self.settle(document, result, errors);
             return;
         }
         let Some(command) = self.line.last().map(|last| last.command.clone()) else {
@@ -276,7 +307,7 @@ impl Controller {
         let result = self.with_line(document, |line, target| {
             line.start(target, &command, Map::new())
         });
-        self.settle(result, errors);
+        self.settle(document, result, errors);
     }
 
     /// The point of the locked fields over the cursor, in meters; `None` without a cursor.
@@ -401,12 +432,17 @@ impl Controller {
 
     fn answer(&mut self, document: &Document, input: PromptInput, errors: &mut Vec<ErrorOut>) {
         let result = self.with_line(document, |line, target| line.answer(target, input));
-        self.settle(result, errors);
+        self.settle(document, result, errors);
     }
 
     /// Takes the outcome of a command-line step: a run or a cancel ends the command's state; a
     /// rejection is an error and keeps the prompt.
-    fn settle(&mut self, result: Result<Submitted>, errors: &mut Vec<ErrorOut>) {
+    fn settle(
+        &mut self,
+        document: &Document,
+        result: Result<Submitted>,
+        errors: &mut Vec<ErrorOut>,
+    ) {
         match push_result(errors, result) {
             Some(Submitted::Ran(outcome)) => {
                 self.history.push(HistoryLine {
@@ -423,9 +459,64 @@ impl Controller {
             Some(Submitted::Prompt(_) | Submitted::Idle) => {
                 self.fields.clear();
                 self.drop_modifier();
+                self.gather = Gather::default();
+                self.preselect(document, errors);
             }
-            None => {}
+            None => {
+                // A run that failed retired the command in the foundation: its state goes too.
+                if self.line.active().is_none() {
+                    if let Some(name) = self.running.take() {
+                        self.history.push(HistoryLine {
+                            role: LineRole::Cancelled,
+                            text: name,
+                        });
+                    }
+                    self.command_ended();
+                }
+            }
         }
+    }
+
+    /// Noun-verb (DB-SEL-009): the first selection prompt of a command takes the session's current
+    /// selection, when the prompt takes entities and the command has no answer yet. Only the objects
+    /// the selection can use are offered (visible, on thawed layers; locked ones are kept, so the
+    /// command refuses them with its own error). A set the prompt refuses is reported once and the
+    /// prompt waits for the user; the selection stays. An accepted set is consumed when the command
+    /// runs or asks its next prompt: it becomes the previous selection, which `previous` brings back
+    /// after a later cancel. A command that is cancelled or fails keeps the selection.
+    /// Trim and extend take their edges this way: a selection made before the command is its edges.
+    fn preselect(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
+        if !self.preselect_due() {
+            return;
+        }
+        let snapshot = document.snapshot();
+        let current = self.session.current_selection(&snapshot);
+        let ids = usable(&snapshot, &current);
+        if ids.is_empty() {
+            return;
+        }
+        let result = self.with_line(document, |line, target| {
+            line.answer(target, PromptInput::Selection(ids))
+        });
+        match result {
+            Ok(Submitted::Rejected { error, .. }) => errors.push(error_out(&error)),
+            Ok(outcome @ (Submitted::Ran(_) | Submitted::Prompt(_))) => {
+                push_unit(errors, self.session.record_selection(&[], &snapshot));
+                self.settle(document, Ok(outcome), errors);
+            }
+            other => self.settle(document, other, errors),
+        }
+    }
+
+    /// Whether the active command waits at its first prompt, which takes entities (an entity
+    /// selection, not an id list read as a list of identifiers of another kind).
+    fn preselect_due(&self) -> bool {
+        self.line.active().is_some_and(|session| {
+            session.answers().is_empty()
+                && session
+                    .prompt()
+                    .is_some_and(|prompt| takes_entities(&prompt.accepts))
+        })
     }
 
     /// The state the command's end resets: the locks, the acquired points and the cursor's snap,
@@ -435,6 +526,7 @@ impl Controller {
         self.resolver.clear_acquired();
         self.acquire = Acquire::Idle;
         self.cursor = None;
+        self.gather = Gather::default();
     }
 
     fn escape(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
@@ -449,6 +541,11 @@ impl Controller {
         if self.window.take().is_some() {
             return;
         }
+        if self.gather.pending() {
+            // A selection prompt drops its gesture and its gathered objects, and keeps waiting.
+            self.gather = Gather::default();
+            return;
+        }
         if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
             let cancelled = self.line.cancel();
             if matches!(cancelled, Submitted::Cancelled) {
@@ -461,12 +558,18 @@ impl Controller {
             return;
         }
         let snapshot = document.snapshot();
-        let cleared = self.session.record_selection(&[], &snapshot);
-        push_unit(errors, cleared);
+        if !self.session.current_selection(&snapshot).is_empty() {
+            let cleared = self.session.record_selection(&[], &snapshot);
+            push_unit(errors, cleared);
+        }
     }
 
     fn option(&mut self, document: &Document, id: String, errors: &mut Vec<ErrorOut>) {
         if self.line.active().is_none() {
+            return;
+        }
+        if let Some(keyword) = self.selection_keyword(&id) {
+            self.select_keyword(document, keyword, errors);
             return;
         }
         let modifier = points::modifier_of(&id).filter(|_| self.point_prompt());
@@ -486,7 +589,7 @@ impl Controller {
         }
         if self.line.active().is_some() {
             let result = self.with_line(document, |line, target| line.back(target));
-            self.settle(result, errors);
+            self.settle(document, result, errors);
             return;
         }
         self.step_history(document, Direction::Undo, errors);
@@ -575,6 +678,19 @@ impl Controller {
             self.finish_window(document, at, errors);
             return;
         }
+        if self.selection_prompt() {
+            match self.gather.shape.clone() {
+                Shape::Default => {}
+                Shape::Box(_) => {
+                    self.start_window(at);
+                    return;
+                }
+                Shape::Polygon { .. } => {
+                    self.add_vertex(resolved.point, errors);
+                    return;
+                }
+            }
+        }
         let snapshot = document.snapshot();
         let prompt_wants = self
             .line
@@ -605,7 +721,7 @@ impl Controller {
                 self.answer(document, PromptInput::Pick(id), errors);
             }
             (Some(wants), Some(id)) if wants.selection => {
-                self.answer(document, PromptInput::Selection(vec![id]), errors);
+                self.gesture(document, vec![id], self.gather.mode, errors);
             }
             (Some(wants), _) if wants.point => {
                 let point = if self.fields.any_locked() {
@@ -621,47 +737,265 @@ impl Controller {
             }
             (Some(wants), None) if wants.selection => self.start_window(at),
             (Some(_), _) => {}
-            (None, Some(id)) => self.select_object(&snapshot, id, errors),
+            (None, Some(id)) => self.gesture(document, vec![id], self.gather.mode, errors),
             (None, None) => self.start_window(at),
         }
-    }
-
-    /// Selects `id` in addition to the selection (the pick adds an object).
-    fn select_object(&mut self, snapshot: &Snapshot, id: ObjectId, errors: &mut Vec<ErrorOut>) {
-        let current = self.session.current_selection(snapshot);
-        let next = combine(&current, &[id], Mode::Add);
-        let set = self.session.record_selection(&next, snapshot);
-        push_unit(errors, set);
     }
 
     fn start_window(&mut self, at: [f64; 2]) {
         self.window = Some(at);
     }
 
-    /// The second click of a window: the objects it selects, as the answer of a selection prompt
-    /// or added to the selection without a command.
+    /// The second click of a window: the objects it selects, taken as a gesture.
     fn finish_window(&mut self, document: &Document, at: [f64; 2], errors: &mut Vec<ErrorOut>) {
         let Some(start) = self.window.take() else {
             return;
         };
         let snapshot = document.snapshot();
-        let ids = push_result(errors, band::select(&snapshot, start, at));
+        let mode = match &self.gather.shape {
+            Shape::Box(mode) => *mode,
+            _ => band::mode(start, at),
+        };
+        let ids = push_result(errors, band::select(&snapshot, start, at, mode));
         let Some(ids) = ids else {
             return;
         };
-        let prompt_selects = self
+        self.gesture(document, ids, self.gather.mode, errors);
+    }
+
+    /// Shift-click: the object under the pointer leaves the selection, or the objects a selection
+    /// prompt gathers (which then takes the next gestures in multiple mode).
+    fn shift_click(
+        &mut self,
+        document: &Document,
+        at: [f64; 2],
+        aperture: f64,
+        picker: &dyn ObjectPicker,
+        errors: &mut Vec<ErrorOut>,
+    ) {
+        if self.move_to(document, at, aperture, errors).is_none() {
+            return;
+        }
+        if self.window.is_some() || self.gather.shape != Shape::Default {
+            return;
+        }
+        let snapshot = document.snapshot();
+        let Some(id) = pick_at(picker, &snapshot, at, aperture) else {
+            return;
+        };
+        if self.selection_prompt() {
+            self.gather.set_multiple(true, None);
+            self.gesture(document, vec![id], Mode::Remove, errors);
+        } else if self.line.active().is_none() {
+            self.gesture(document, vec![id], Mode::Remove, errors);
+        }
+    }
+
+    /// A lasso: the free-hand outline selects by window polygon when the drag ends right of where it
+    /// starts, else by crossing polygon, as a gesture of the selection prompt or of no command.
+    fn lasso(&mut self, document: &Document, path: &[[f64; 2]], errors: &mut Vec<ErrorOut>) {
+        if self.line.active().is_some() && !self.selection_prompt() {
+            return;
+        }
+        // A pending window or polygon keeps its corners and vertices: the lasso is refused instead.
+        if self.window.is_some() || self.gather.shape != Shape::Default {
+            errors.push(error_out(
+                &Error::new(codes::SELECTION_INVALID).with_detail("reason", "gesture_pending"),
+            ));
+            return;
+        }
+        if path.len() > methods::MAX_VERTICES {
+            errors.push(error_out(
+                &Error::new(codes::LIMIT_EXCEEDED)
+                    .with_detail("limit", methods::MAX_VERTICES.to_string()),
+            ));
+            return;
+        }
+        // Vertices within the linear tolerance of the one before make no edge (a resting pointer,
+        // jitter), and a drag that returns to its start closes the outline: both are dropped.
+        let linear = Tolerance::DEFAULT.linear;
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < linear;
+        let mut outline: Vec<[f64; 2]> = Vec::with_capacity(path.len());
+        for point in path {
+            if outline.last().is_none_or(|last| !near(*last, *point)) {
+                outline.push(*point);
+            }
+        }
+        if outline.len() > 1
+            && outline
+                .first()
+                .zip(outline.last())
+                .is_some_and(|(a, b)| near(*a, *b))
+        {
+            outline.pop();
+        }
+        let (Some(first), Some(last)) = (outline.first(), outline.last()) else {
+            return;
+        };
+        let region = if last[0] >= first[0] {
+            Region::Window
+        } else {
+            Region::Crossing
+        };
+        let snapshot = document.snapshot();
+        let ids = push_result(errors, gather::region_ids(&snapshot, region, &outline));
+        if let Some(ids) = ids {
+            self.gesture(document, ids, self.gather.mode, errors);
+        }
+    }
+
+    /// A gesture of the pointer or a keyword: at a selection prompt it answers the prompt, or in
+    /// multiple mode combines with the gathered objects; with no command it changes the selection.
+    /// A prompt that takes no selection ignores it.
+    fn gesture(
+        &mut self,
+        document: &Document,
+        ids: Vec<ObjectId>,
+        mode: Mode,
+        errors: &mut Vec<ErrorOut>,
+    ) {
+        if self.selection_prompt() {
+            self.gather.shape = Shape::Default;
+            if self.gather.multiple {
+                push_unit(errors, self.gather.apply(&ids, mode));
+            } else {
+                self.answer(document, PromptInput::Selection(ids), errors);
+            }
+            return;
+        }
+        if self.line.active().is_some() {
+            return;
+        }
+        let snapshot = document.snapshot();
+        let current = self.session.current_selection(&snapshot);
+        let next = combine(&current, &ids, mode);
+        // A gesture that changes nothing keeps the previous selection as it was.
+        if next != current {
+            let set = self.session.record_selection(&next, &snapshot);
+            push_unit(errors, set);
+        }
+    }
+
+    /// Whether the active prompt takes a selection.
+    fn selection_prompt(&self) -> bool {
+        self.line
+            .active()
+            .and_then(|s| s.prompt())
+            .is_some_and(|p| Wants::of(&p.accepts).selection)
+    }
+
+    /// The keyword of a selection prompt that `text` names, when the prompt's own keywords do not
+    /// claim the word.
+    fn selection_keyword(&self, text: &str) -> Option<&'static str> {
+        if !self.selection_prompt() {
+            return None;
+        }
+        if self
             .line
             .active()
             .and_then(|s| s.prompt())
-            .is_some_and(|p| Wants::of(&p.accepts).selection);
-        if prompt_selects {
-            self.answer(document, PromptInput::Selection(ids), errors);
+            .is_some_and(|p| acquire::claimed_by(p, text))
+        {
+            return None;
+        }
+        gather::keyword(text).or_else(|| {
+            text.trim()
+                .eq_ignore_ascii_case("selection")
+                .then_some("selection")
+        })
+    }
+
+    /// Applies a keyword of a selection prompt. Shape keywords set the shape of the next gesture;
+    /// the others are gestures (`all`, `last`, `previous`) or change the gathering.
+    fn select_keyword(&mut self, document: &Document, id: &str, errors: &mut Vec<ErrorOut>) {
+        let shape = match id {
+            "window" => Some(Shape::Box(BandMode::Window)),
+            "crossing" => Some(Shape::Box(BandMode::Crossing)),
+            "wpolygon" => Some(Shape::Polygon {
+                region: Region::Window,
+                points: Vec::new(),
+            }),
+            "cpolygon" => Some(Shape::Polygon {
+                region: Region::Crossing,
+                points: Vec::new(),
+            }),
+            "fence" => Some(Shape::Polygon {
+                region: Region::Fence,
+                points: Vec::new(),
+            }),
+            _ => None,
+        };
+        if let Some(shape) = shape {
+            self.gather.shape = shape;
             return;
         }
-        let current = self.session.current_selection(&snapshot);
-        let next = combine(&current, &ids, Mode::Add);
-        let set = self.session.record_selection(&next, &snapshot);
-        push_unit(errors, set);
+        match id {
+            "add" => self.gather.set_multiple(true, Some(Mode::Add)),
+            "remove" => self.gather.set_multiple(true, Some(Mode::Remove)),
+            "multiple" => self.gather.set_multiple(true, None),
+            "single" => self.gather.single(),
+            "undo" if self.gather.has_steps() => self.gather.undo(),
+            // Nothing gathered: the prompt's previous answer steps back, as undo does.
+            "undo" => self.undo(document, errors),
+            "all" | "last" | "previous" | "selection" => {
+                self.gather.shape = Shape::Default;
+                self.window = None;
+                let snapshot = document.snapshot();
+                let ids = match id {
+                    "all" => crate::model_space(&snapshot)
+                        .ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))
+                        .and_then(|space| {
+                            methods::select_all(&snapshot, space, &Options::default())
+                        })
+                        .map(|pick| pick.ids),
+                    "last" => Ok(crate::last_objects(&snapshot)),
+                    "previous" => Ok(usable(
+                        &snapshot,
+                        &self.session.previous_selection(&snapshot),
+                    )),
+                    _ => Ok(usable(
+                        &snapshot,
+                        &self.session.current_selection(&snapshot),
+                    )),
+                };
+                match ids {
+                    Ok(ids) => self.gesture(document, ids, self.gather.mode, errors),
+                    Err(error) => errors.push(error_out(&error)),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Adds a polygon or fence vertex, bounded by the vertex limit of the selection methods.
+    fn add_vertex(&mut self, point: [f64; 2], errors: &mut Vec<ErrorOut>) {
+        let Shape::Polygon { points, .. } = &mut self.gather.shape else {
+            return;
+        };
+        if points.len() >= methods::MAX_VERTICES {
+            errors.push(error_out(
+                &Error::new(codes::LIMIT_EXCEEDED)
+                    .with_detail("limit", methods::MAX_VERTICES.to_string()),
+            ));
+            return;
+        }
+        points.push(point);
+    }
+
+    /// Closes the polygon or fence of the selection prompt: its objects are a gesture, and the shape
+    /// is dropped. Too few vertices are refused and the shape keeps waiting.
+    fn close_polygon(
+        &mut self,
+        document: &Document,
+        region: Region,
+        points: &[[f64; 2]],
+        errors: &mut Vec<ErrorOut>,
+    ) {
+        let snapshot = document.snapshot();
+        match gather::region_ids(&snapshot, region, points) {
+            Ok(ids) => self.gesture(document, ids, self.gather.mode, errors),
+            Err(error) => errors.push(error_out(&error)),
+        }
     }
 
     /// The active prompt as the window shows it, when a command waits.
@@ -684,6 +1018,11 @@ impl Controller {
                         id: o.id.clone(),
                         label: o.label.clone(),
                         shortcut: o.shortcut,
+                    })
+                    .chain(if Wants::of(&p.accepts).selection {
+                        gather::options()
+                    } else {
+                        Vec::new()
                     })
                     .collect(),
                 default: match &p.default {
@@ -823,6 +1162,20 @@ impl Controller {
         }
     }
 
+    /// The selection the window shows: the gathered objects in multiple mode, else the session's.
+    fn shown_selection(&self, snapshot: &Snapshot) -> Vec<ObjectId> {
+        if self.gather.multiple {
+            self.gather
+                .ids
+                .iter()
+                .copied()
+                .filter(|id| snapshot.resolve(*id).is_ok())
+                .collect()
+        } else {
+            self.session.current_selection(snapshot)
+        }
+    }
+
     fn outputs(&mut self, document: &Document, errors: Vec<ErrorOut>) -> Outputs {
         let excess = self.history.len().saturating_sub(self.history_limit());
         self.history.drain(..excess);
@@ -837,7 +1190,10 @@ impl Controller {
             (Some(start), Some((_, at))) => Some(BandOut {
                 base: start,
                 current: *at,
-                mode: band::mode(start, *at),
+                mode: match &self.gather.shape {
+                    Shape::Box(mode) => *mode,
+                    _ => band::mode(start, *at),
+                },
             }),
             (None, Some((r, _))) if expects_point && base.is_some() => Some(BandOut {
                 base: base.unwrap_or_default(),
@@ -863,7 +1219,7 @@ impl Controller {
             }),
             tracking: cursor.map(|r| r.tracking.clone()).unwrap_or_default(),
             dynamic,
-            selection: self.session.current_selection(&snapshot),
+            selection: self.shown_selection(&snapshot),
             cursor: cursor.map(|r| CursorOut {
                 point: r.point,
                 source: r.source,
@@ -875,6 +1231,29 @@ impl Controller {
             errors,
         }
     }
+}
+
+/// The objects of `ids` a selection can use in the model space: the filter of the selection methods
+/// for visible objects on thawed layers, with locked objects kept, so that the command itself
+/// refuses them with its own error. Empty without a model space.
+fn usable(snapshot: &Snapshot, ids: &[ObjectId]) -> Vec<ObjectId> {
+    let Some(space) = crate::model_space(snapshot) else {
+        return Vec::new();
+    };
+    let options = Options {
+        include_locked: true,
+    };
+    methods::select_previous(snapshot, space, ids, &options)
+        .map(|pick| pick.ids)
+        .unwrap_or_default()
+}
+
+/// Whether a prompt takes entities: a selection whose types name them. A selection without types
+/// is an identifier list of another kind (layers, for instance), which a selection never fills.
+fn takes_entities(accepts: &[Accept]) -> bool {
+    accepts
+        .iter()
+        .any(|accept| matches!(accept, Accept::Selection { types, .. } if !types.is_empty()))
 }
 
 /// The unit direction from `from` to `to` (meters), `None` when they coincide.
@@ -950,5 +1329,28 @@ fn push_result<T>(errors: &mut Vec<ErrorOut>, result: Result<T>) -> Option<T> {
 fn push_unit(errors: &mut Vec<ErrorOut>, result: Result<()>) {
     if let Err(error) = result {
         errors.push(error_out(&error));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arc_command::Accept;
+
+    use super::takes_entities;
+
+    #[test]
+    fn an_id_list_without_entity_types_is_never_preselected() {
+        let layers = Accept::Selection {
+            min: 1,
+            max: None,
+            types: Vec::new(),
+        };
+        let entities = Accept::Selection {
+            min: 1,
+            max: None,
+            types: vec!["LINE".to_owned()],
+        };
+        assert!(!takes_entities(&[layers]));
+        assert!(takes_entities(&[entities]));
     }
 }

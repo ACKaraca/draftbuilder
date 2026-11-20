@@ -22,19 +22,24 @@ pub(super) fn mode(start: [f64; 2], end: [f64; 2]) -> BandMode {
 }
 
 /// The objects of the model space that the window or crossing from `start` to `end` (meters)
-/// selects, in draw order.
+/// selects, in draw order. `mode` is the window or the crossing drawn.
 ///
 /// # Errors
 ///
 /// `db.cmd.no_model_space` for a document without one; `db.cmd.selection_invalid` for a rectangle
 /// with no width or height.
-pub(super) fn select(snapshot: &Snapshot, start: [f64; 2], end: [f64; 2]) -> Result<Vec<ObjectId>> {
+pub(super) fn select(
+    snapshot: &Snapshot,
+    start: [f64; 2],
+    end: [f64; 2],
+    mode: BandMode,
+) -> Result<Vec<ObjectId>> {
     let space = crate::model_space(snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
     let corner =
         |p: [f64; 2]| Point2::new(from_meters(snapshot, p[0]), from_meters(snapshot, p[1]));
     let corners = [corner(start), corner(end)];
     let options = Options::default();
-    let pick = match mode(start, end) {
+    let pick = match mode {
         BandMode::Crossing => methods::select_crossing(snapshot, space, corners, &options)?,
         _ => methods::select_window(snapshot, space, corners, &options)?,
     };

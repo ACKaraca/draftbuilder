@@ -550,3 +550,18 @@ db-cmd-layer-viewport-property-transparency = Saydamlık
 db-cmd-property-summary-label = Özellikleri özetle
 db-cmd-property-summary-description = Seçilen nesnelerin ortak özelliklerini değerleriyle, aralarında farklı olan özellikleri de kategoriye göre gruplayarak bildirir; isteğe bağlı olarak tek bir nesne türüne süzülür.
 db-cmd-property-summary-objects = Özetlenecek nesneleri seçin:
+
+# Seçim isteminin anahtar sözcükleri (interaction/gather.rs; tanımlayıcılar vocabulary.rs SELECTION_OPTIONS).
+db-sel-option-all = Tümü
+db-sel-option-last = Son
+db-sel-option-previous = Önceki
+db-sel-option-window = Pencere
+db-sel-option-crossing = Çapraz
+db-sel-option-wpolygon = Pencere çokgeni
+db-sel-option-cpolygon = Çapraz çokgen
+db-sel-option-fence = Çit
+db-sel-option-add = Ekle
+db-sel-option-remove = Çıkar
+db-sel-option-multiple = Çoklu
+db-sel-option-single = Tekli
+db-sel-option-undo = Geri al

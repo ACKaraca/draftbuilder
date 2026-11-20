@@ -548,3 +548,18 @@ db-cmd-modify-reference-second = Specify second point of the reference length:
 db-setting-command-autocomplete-on = Whether typing on the command line suggests matching commands, aliases and settings.
 db-setting-command-autocorrect-on = Whether a typed name that matches nothing suggests the closest command name.
 db-setting-command-history-length = The number of command-line history lines kept, from 10 to 1000.
+
+# Selection prompt keywords (interaction/gather.rs; the identifiers are vocabulary.rs SELECTION_OPTIONS).
+db-sel-option-all = All
+db-sel-option-last = Last
+db-sel-option-previous = Previous
+db-sel-option-window = Window
+db-sel-option-crossing = Crossing
+db-sel-option-wpolygon = Window polygon
+db-sel-option-cpolygon = Crossing polygon
+db-sel-option-fence = Fence
+db-sel-option-add = Add
+db-sel-option-remove = Remove
+db-sel-option-multiple = Multiple
+db-sel-option-single = Single
+db-sel-option-undo = Undo

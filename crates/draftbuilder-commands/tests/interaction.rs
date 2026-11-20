@@ -13,7 +13,8 @@ mod common;
 use arc_command::Permission;
 use arc_draft::snap::{ConstraintSource, SnapKind};
 use draftbuilder_commands::interaction::{
-    BandMode, Controller, CrossingPicker, DynamicMode, Event, LineRole, ModifierStep, Outputs,
+    BandMode, Controller, CrossingPicker, DynamicMode, Event, Expect, LineRole, ModifierStep,
+    Outputs,
 };
 use draftbuilder_commands::precision::points::Modifier;
 use serde_json::json;
@@ -264,24 +265,308 @@ fn a_click_selects_an_object_and_a_window_or_crossing_follows_the_drag_direction
 }
 
 #[test]
-fn a_command_uses_the_selection_made_by_clicks() {
+fn a_command_uses_the_selection_made_by_clicks_without_a_prompt() {
     let (mut env, mut c) = setup();
     let (a, b, outside) = selection_fixture(&mut env);
     click(&env, &mut c, 0.0, 0.0);
     click(&env, &mut c, 6.0, 6.0); // window: a
     click(&env, &mut c, 6.0, 6.0);
     click(&env, &mut c, 0.0, 0.0); // crossing: a and b, added
+    // Noun-verb: the selection is the command's objects, so no prompt waits.
     let out = submit(&env, &mut c, "ERASE");
-    assert_eq!(out.prompt.unwrap().command, "draftbuilder.modify.erase");
-    let out = submit(&env, &mut c, "selection");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(out.prompt.is_none());
+    assert!(out.selection.is_empty(), "the used selection is consumed");
     let snapshot = env.document.snapshot();
-    let left = lines(&snapshot);
-    assert_eq!(left.len(), 1, "a and b are erased");
+    assert_eq!(lines(&snapshot).len(), 1, "a and b are erased");
     let kept = outside.parse().unwrap();
     assert!(snapshot.resolve(kept).is_ok(), "the outside line is kept");
     assert!(snapshot.resolve(a.parse().unwrap()).is_err());
     assert!(snapshot.resolve(b.parse().unwrap()).is_err());
+}
+
+#[test]
+fn a_command_with_a_selection_still_asks_for_its_points() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a
+    let out = submit(&env, &mut c, "ROTATE");
+    let prompt = out.prompt.unwrap();
+    assert_eq!(prompt.command, "draftbuilder.modify.rotate");
+    assert!(prompt.expects.contains(&Expect::Point), "{prompt:?}");
+    assert_eq!(
+        out.selection.len(),
+        0,
+        "a is consumed by the rotation's objects"
+    );
+    let _ = a;
+}
+
+#[test]
+fn the_selection_keywords_are_offered_and_an_option_activates_the_window_keyword() {
+    let (mut env, mut c) = setup();
+    selection_fixture(&mut env);
+    let out = submit(&env, &mut c, "ERASE");
+    let prompt = out.prompt.unwrap();
+    let window = prompt.options.iter().find(|o| o.id == "window").unwrap();
+    assert_eq!(window.label, "db-sel-option-window");
+    assert!(prompt.options.iter().any(|o| o.id == "wpolygon"));
+    send(&env, &mut c, Event::Option("window".to_owned()));
+    click(&env, &mut c, 0.0, 0.0);
+    let out = click(&env, &mut c, 6.0, 6.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(lines(&env.document.snapshot()).len(), 2, "only a is erased");
+}
+
+#[test]
+fn a_window_keyword_takes_two_corners_whatever_their_order() {
+    let (mut env, mut c) = setup();
+    let (_, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "WINDOW");
+    // Right to left, but the keyword forces a window: a is inside, b crosses the edge.
+    click(&env, &mut c, 6.0, 6.0);
+    let out = move_to(&env, &mut c, 0.0, 0.0);
+    assert_eq!(out.band.unwrap().mode, BandMode::Window);
+    let out = click(&env, &mut c, 0.0, 0.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(out.prompt.is_none(), "the one erase answer ran");
+    let snapshot = env.document.snapshot();
+    assert!(snapshot.resolve(b.parse().unwrap()).is_ok(), "b is kept");
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+    assert_eq!(lines(&snapshot).len(), 2);
+}
+
+#[test]
+fn a_crossing_keyword_takes_what_the_box_touches_whatever_the_drag_direction() {
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "crossing");
+    click(&env, &mut c, 0.0, 0.0);
+    let out = click(&env, &mut c, 6.0, 6.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let snapshot = env.document.snapshot();
+    assert!(snapshot.resolve(a.parse().unwrap()).is_err());
+    assert!(snapshot.resolve(b.parse().unwrap()).is_err());
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn a_window_polygon_keyword_takes_vertices_until_an_empty_line() {
+    let (mut env, mut c) = setup();
+    let (a, b, _) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "wpolygon");
+    for (x, y) in [(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (0.0, 6.0)] {
+        let out = click(&env, &mut c, x, y);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(out.prompt.is_some(), "the polygon waits for its vertices");
+    }
+    // Too few vertices are refused and the polygon keeps its vertices.
+    let out = submit(&env, &mut c, "");
+    assert!(out.prompt.is_none(), "an empty line closes a valid polygon");
+    let snapshot = env.document.snapshot();
+    assert!(snapshot.resolve(a.parse().unwrap()).is_err(), "a is inside");
+    assert!(
+        snapshot.resolve(b.parse().unwrap()).is_ok(),
+        "b crosses the boundary"
+    );
+}
+
+#[test]
+fn a_crossing_polygon_and_a_fence_keyword_select_what_their_outline_touches() {
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "cpolygon");
+    for (x, y) in [(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (0.0, 6.0)] {
+        click(&env, &mut c, x, y);
+    }
+    submit(&env, &mut c, "");
+    let snapshot = env.document.snapshot();
+    assert!(snapshot.resolve(a.parse().unwrap()).is_err());
+    assert!(snapshot.resolve(b.parse().unwrap()).is_err());
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "FENCE");
+    click(&env, &mut c, -5.0, 2.0);
+    click(&env, &mut c, 6.5, 2.0);
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let snapshot = env.document.snapshot();
+    assert!(
+        snapshot.resolve(a.parse().unwrap()).is_err(),
+        "the fence crosses a"
+    );
+    assert!(snapshot.resolve(b.parse().unwrap()).is_err(), "and b");
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn a_fence_with_one_vertex_is_refused_and_the_fence_keeps_waiting() {
+    let (mut env, mut c) = setup();
+    selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "fence");
+    click(&env, &mut c, -5.0, 2.0);
+    let out = submit(&env, &mut c, "");
+    assert_eq!(errors_of(&out), vec!["db.cmd.selection_invalid"]);
+    assert!(out.prompt.is_some());
+    assert_eq!(lines(&env.document.snapshot()).len(), 3, "nothing erased");
+}
+
+#[test]
+fn multiple_mode_gathers_gestures_until_an_empty_line_and_undo_takes_back_the_last() {
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "multiple");
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 6.0, 6.0); // window: a, gathered
+    let out = click(&env, &mut c, 19.0, 19.0);
+    assert!(out.prompt.is_some(), "multiple mode keeps the prompt");
+    let out = click(&env, &mut c, 31.0, 31.0); // window: c, gathered
+    assert_eq!(out.selection.len(), 2, "the gathered set is shown");
+    let out = submit(&env, &mut c, "undo");
+    assert_eq!(out.selection.len(), 1, "undo takes back the window of c");
+    let out = submit(&env, &mut c, "");
+    assert!(out.prompt.is_none(), "the empty line answers with a");
+    let snapshot = env.document.snapshot();
+    assert!(snapshot.resolve(a.parse().unwrap()).is_err());
+    assert!(snapshot.resolve(b.parse().unwrap()).is_ok());
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn remove_takes_an_object_out_of_the_gathered_set_and_add_puts_it_back() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "multiple");
+    let out = click(&env, &mut c, 2.5, 2.5);
+    assert_eq!(out.selection.len(), 1);
+    submit(&env, &mut c, "remove");
+    let out = click(&env, &mut c, 2.5, 2.5);
+    assert!(out.selection.is_empty());
+    // An empty set is refused and the prompt keeps waiting.
+    let out = submit(&env, &mut c, "");
+    assert!(!out.errors.is_empty(), "an empty set is refused");
+    assert!(out.prompt.is_some());
+    submit(&env, &mut c, "ADD");
+    click(&env, &mut c, 2.5, 2.5);
+    let out = submit(&env, &mut c, "");
+    assert!(out.prompt.is_none());
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
+}
+
+#[test]
+fn escape_drops_the_gathered_set_and_keeps_the_prompt() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "multiple");
+    click(&env, &mut c, 2.5, 2.5);
+    let out = send(&env, &mut c, Event::Escape);
+    assert!(out.selection.is_empty());
+    assert!(out.prompt.is_some(), "the command still waits");
+    // Back in single mode, a click answers the prompt at once.
+    let out = click(&env, &mut c, 2.5, 2.5);
+    assert!(out.prompt.is_none());
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
+}
+
+#[test]
+fn a_click_on_empty_space_at_a_selection_prompt_starts_a_window_by_drag_direction() {
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    click(&env, &mut c, 0.0, 0.0);
+    let out = move_to(&env, &mut c, 6.0, 6.0);
+    assert_eq!(out.band.unwrap().mode, BandMode::Window);
+    click(&env, &mut c, 6.0, 6.0);
+    let snapshot = env.document.snapshot();
+    assert!(
+        snapshot.resolve(a.parse().unwrap()).is_err(),
+        "the window takes a"
+    );
+    assert!(snapshot.resolve(b.parse().unwrap()).is_ok());
+
+    submit(&env, &mut c, "ERASE");
+    click(&env, &mut c, 6.0, 6.0);
+    let out = move_to(&env, &mut c, 0.0, 0.0);
+    assert_eq!(out.band.unwrap().mode, BandMode::Crossing);
+    click(&env, &mut c, 0.0, 0.0);
+    let snapshot = env.document.snapshot();
+    assert!(
+        snapshot.resolve(b.parse().unwrap()).is_err(),
+        "the crossing takes b"
+    );
+    assert!(snapshot.resolve(outside.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn shift_click_takes_an_object_out_of_the_selection_without_a_command() {
+    let (mut env, mut c) = setup();
+    let (a, b, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 6.0, 6.0);
+    click(&env, &mut c, 6.0, 6.0);
+    click(&env, &mut c, 0.0, 0.0); // crossing: a and b
+    let out = send(
+        &env,
+        &mut c,
+        Event::ShiftClick {
+            at: [5.0, 10.0],
+            aperture: APERTURE,
+        },
+    );
+    let picked: Vec<String> = out.selection.iter().map(ToString::to_string).collect();
+    assert_eq!(picked, vec![a], "b leaves the selection, a stays");
+    assert!(!picked.contains(&b));
+}
+
+#[test]
+fn a_lasso_selects_by_window_or_crossing_polygon_as_the_drag_ends() {
+    let (mut env, mut c) = setup();
+    let (a, b, outside) = selection_fixture(&mut env);
+    // Ends at the start's x or to the right: a window, so only a is inside.
+    let out = send(
+        &env,
+        &mut c,
+        Event::Lasso {
+            path: vec![
+                [-1.0, -1.0],
+                [7.0, -1.0],
+                [7.0, 7.0],
+                [-1.0, 7.0],
+                [-1.0, -1.0],
+            ],
+        },
+    );
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let picked: Vec<String> = out.selection.iter().map(ToString::to_string).collect();
+    assert_eq!(picked, vec![a.clone()]);
+    // Ends left of its start: a crossing polygon, so b is picked too, the outside line is not.
+    let out = send(
+        &env,
+        &mut c,
+        Event::Lasso {
+            path: vec![
+                [7.0, -1.0],
+                [-1.0, -1.0],
+                [-1.0, 7.0],
+                [7.0, 7.0],
+                [6.5, -1.0],
+            ],
+        },
+    );
+    assert_eq!(out.selection.len(), 2, "{:?}", out.selection);
+    assert!(out.selection.iter().any(|id| id.to_string() == b));
+    assert!(!out.selection.iter().any(|id| id.to_string() == outside));
 }
 
 #[test]
@@ -893,4 +1178,227 @@ fn a_typed_text_the_point_reader_refuses_keeps_the_modifier_waiting() {
         modifier_at(&out),
         Some((Modifier::From, ModifierStep::First))
     );
+}
+
+/// Moves `id` onto a new layer `name`, a layer of the drawing made for the test.
+fn move_to_layer(env: &mut Env, id: &str, name: &str) {
+    env.run("draftbuilder.layer.create", json!({"name": name}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [id], "layer": name}),
+    );
+}
+
+#[test]
+fn a_frozen_object_is_not_preselected_and_the_prompt_asks_instead() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    move_to_layer(&mut env, &a, "F");
+    click(&env, &mut c, 2.5, 2.5); // a is the selection
+    env.run("draftbuilder.layer.freeze", json!({"objects": [a.clone()]}));
+    let out = submit(&env, &mut c, "ERASE");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(
+        out.prompt.is_some(),
+        "nothing usable is left: the prompt asks"
+    );
+    assert_eq!(lines(&env.document.snapshot()).len(), 3, "a is not erased");
+}
+
+#[test]
+fn previous_at_a_prompt_does_not_return_a_frozen_object() {
+    let (mut env, mut c) = setup();
+    let (a, b, _) = selection_fixture(&mut env);
+    move_to_layer(&mut env, &a, "F");
+    click(&env, &mut c, 2.5, 2.5); // a
+    click(&env, &mut c, 5.0, 10.0); // b, so the previous selection is a
+    env.run("draftbuilder.layer.freeze", json!({"objects": [a.clone()]}));
+    send(&env, &mut c, Event::Escape); // clears: previous is now a and b
+    let out = submit(&env, &mut c, "ERASE");
+    assert!(out.prompt.is_some());
+    let out = submit(&env, &mut c, "previous");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let snapshot = env.document.snapshot();
+    assert!(
+        snapshot.resolve(a.parse().unwrap()).is_ok(),
+        "the frozen a stays"
+    );
+    assert!(snapshot.resolve(b.parse().unwrap()).is_err(), "b is erased");
+}
+
+#[test]
+fn a_locked_preselection_surfaces_the_command_error_and_keeps_the_selection() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a
+    move_to_layer(&mut env, &a, "L");
+    env.run("draftbuilder.layer.lock", json!({"objects": [a.clone()]}));
+    let out = submit(&env, &mut c, "ERASE");
+    assert!(
+        !out.errors.is_empty(),
+        "the locked layer refuses, and the error shows"
+    );
+    assert!(out.prompt.is_none(), "the command is ended");
+    assert!(
+        matches!(out.history.last(), Some(line) if line.role == LineRole::Cancelled),
+        "{:?}",
+        out.history
+    );
+    assert_eq!(
+        out.selection,
+        vec![a.parse().unwrap()],
+        "the selection is kept"
+    );
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn a_refused_preselection_is_reported_once_and_the_prompt_waits_with_the_selection() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a, a line: PEDIT takes polylines only
+    let out = submit(&env, &mut c, "PEDIT");
+    assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+    let prompt = out.prompt.expect("the prompt waits");
+    assert_eq!(prompt.command, "draftbuilder.modify.pedit");
+    assert_eq!(out.selection, vec![a.parse().unwrap()]);
+}
+
+#[test]
+fn a_consumed_preselection_comes_back_with_previous_after_a_cancel() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a
+    let out = submit(&env, &mut c, "TRIM");
+    assert!(out.prompt.is_some(), "trim asks for its targets next");
+    assert!(
+        out.selection.is_empty(),
+        "a is consumed as the cutting edge"
+    );
+    send(&env, &mut c, Event::Escape); // cancels trim
+    submit(&env, &mut c, "ERASE");
+    let out = submit(&env, &mut c, "previous");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
+}
+
+#[test]
+fn a_gesture_that_changes_nothing_keeps_the_previous_selection() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a
+    send(&env, &mut c, Event::Escape); // previous is a, current is empty
+    click(&env, &mut c, -10.0, -10.0); // an empty window: selects nothing
+    click(&env, &mut c, -9.0, -9.0);
+    send(
+        &env,
+        &mut c,
+        Event::ShiftClick {
+            at: [5.0, 10.0],
+            aperture: APERTURE,
+        },
+    ); // b is not selected: nothing leaves
+    let out = submit(&env, &mut c, "ERASE");
+    assert!(out.prompt.is_some(), "the selection is still empty");
+    let out = submit(&env, &mut c, "previous");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
+}
+
+#[test]
+fn undo_with_nothing_gathered_steps_back_the_prompt_answer() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "OFFSET");
+    let out = submit(&env, &mut c, "1");
+    assert_eq!(out.prompt.unwrap().key, "objects");
+    // Nothing is gathered: typed undo steps back the distance answer, as Undo does.
+    let out = submit(&env, &mut c, "undo");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        out.prompt.unwrap().key,
+        "distance",
+        "the distance prompt asks again"
+    );
+}
+
+#[test]
+fn the_typed_selection_keyword_answers_a_prompt_with_the_usable_selection() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    click(&env, &mut c, 2.5, 2.5); // a is the selection; OFFSET asks its distance first
+    submit(&env, &mut c, "OFFSET");
+    let out = submit(&env, &mut c, "1");
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("objects"));
+    let out = submit(&env, &mut c, "selection");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let prompt = out.prompt.expect("offset asks the side");
+    assert_ne!(
+        prompt.key, "objects",
+        "the selection answered the objects prompt"
+    );
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_ok());
+}
+
+#[test]
+fn a_bowtie_lasso_is_refused_as_an_invalid_polygon_and_selects_nothing() {
+    let (mut env, mut c) = setup();
+    selection_fixture(&mut env);
+    let out = send(
+        &env,
+        &mut c,
+        Event::Lasso {
+            path: vec![[0.0, 0.0], [6.0, 6.0], [6.0, 0.0], [0.0, 6.0]],
+        },
+    );
+    assert_eq!(errors_of(&out), vec!["db.cmd.selection_invalid"]);
+    assert!(out.selection.is_empty());
+}
+
+#[test]
+fn a_lasso_while_a_polygon_is_pending_is_refused_and_keeps_its_vertices() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    submit(&env, &mut c, "ERASE");
+    submit(&env, &mut c, "wpolygon");
+    click(&env, &mut c, 0.0, 0.0);
+    let out = send(
+        &env,
+        &mut c,
+        Event::Lasso {
+            path: vec![[20.0, 20.0], [30.0, 20.0], [30.0, 30.0]],
+        },
+    );
+    assert_eq!(errors_of(&out), vec!["db.cmd.selection_invalid"]);
+    for (x, y) in [(6.0, 0.0), (6.0, 6.0), (0.0, 6.0)] {
+        click(&env, &mut c, x, y);
+    }
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(
+        env.document.snapshot().resolve(a.parse().unwrap()).is_err(),
+        "a is in the kept polygon"
+    );
+}
+
+#[test]
+fn a_lasso_drops_vertices_within_the_linear_tolerance_of_the_one_before() {
+    let (mut env, mut c) = setup();
+    let (a, _, _) = selection_fixture(&mut env);
+    let out = send(
+        &env,
+        &mut c,
+        Event::Lasso {
+            path: vec![
+                [-1.0, -1.0],
+                [-1.0 + 1e-12, -1.0],
+                [7.0, -1.0],
+                [7.0, 7.0],
+                [-1.0, 7.0],
+                [-1.0 + 1e-12, -1.0 + 1e-12],
+            ],
+        },
+    );
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let picked: Vec<String> = out.selection.iter().map(ToString::to_string).collect();
+    assert_eq!(picked, vec![a]);
 }

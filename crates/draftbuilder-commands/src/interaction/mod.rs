@@ -21,8 +21,16 @@
 //! - [`Event::Click`]: answers the active point prompt with the resolved point; answers an object
 //!   prompt with the object under the pointer (through the host's [`ObjectPicker`]); with no
 //!   command, adds the object under the pointer to the selection, or starts a window or crossing
-//!   that the second click finishes by drag direction.
-//! - [`Event::Option`]: activates a keyword option of the active prompt.
+//!   that the second click finishes by drag direction. At a selection prompt a click on empty space
+//!   starts the same window, and a click after a `window`, `crossing` or polygon keyword takes the
+//!   corner or the vertex the keyword asks for (see `gather`).
+//! - [`Event::ShiftClick`]: removes the object under the pointer from the selection, or from the
+//!   objects a selection prompt gathers.
+//! - [`Event::Lasso`]: a free-hand outline dragged over the drawing selects by window or crossing
+//!   polygon, as the drag ends right of or left of where it starts.
+//! - [`Event::Option`] and a typed word: a keyword of a selection prompt (`all`, `last`, `previous`,
+//!   `window`, `crossing`, `wpolygon`, `cpolygon`, `fence`, `add`, `remove`, `multiple`, `single`,
+//!   `undo`) is taken by the controller; the prompt's own keywords win.
 //! - [`Event::Field`] and [`Event::Tab`]: the dynamic input fields.
 //! - [`Event::Redo`]: steps the document forward (a waiting command is cancelled first).
 //! - [`Event::Undo`]: steps back one prompt answer of the active command, else steps the document's
@@ -35,6 +43,7 @@ mod acquire;
 mod band;
 mod controller;
 mod fields;
+mod gather;
 mod lookup;
 mod resolution;
 
@@ -112,6 +121,20 @@ pub enum Event {
     },
     /// Tab: moves the focus to the other dynamic input field.
     Tab,
+    /// Shift-click at `at` (meters) with a pick aperture of `aperture`: the object under the
+    /// pointer leaves the selection, or the objects a selection prompt gathers.
+    ShiftClick {
+        /// The pointer position, in meters.
+        at: [f64; 2],
+        /// The pick aperture, in meters.
+        aperture: f64,
+    },
+    /// A free-hand outline, from the press to the release, its vertices in meters. A selection
+    /// prompt or the selection without a command takes the objects inside or crossing it.
+    Lasso {
+        /// The vertices in drawing order, in meters.
+        path: Vec<[f64; 2]>,
+    },
     /// Undo: one prompt answer back in the active command, else one step of the document history.
     Undo,
     /// Redo: one step of the document history forward; a waiting command is cancelled first.

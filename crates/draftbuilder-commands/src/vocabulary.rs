@@ -552,3 +552,71 @@ pub fn register_names(registry: &mut Registry, area: Area) -> Result<()> {
     }
     Ok(())
 }
+
+/// One keyword a selection prompt takes: its identifier, which is also what the typed word names,
+/// and the message identifier of its label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionOption {
+    /// The identifier, typed in lower or upper case.
+    pub id: &'static str,
+    /// The label's message identifier.
+    pub message_id: &'static str,
+}
+
+/// The keywords of a selection prompt, in the order the prompt offers them (DB-SEL-005, 003, 007,
+/// 010). `window`, `crossing`, `wpolygon`, `cpolygon` and `fence` define the shape of the next
+/// gestures; `add`, `remove`, `multiple`, `single` and `undo` change how gestures are gathered.
+pub const SELECTION_OPTIONS: &[SelectionOption] = &[
+    SelectionOption {
+        id: "all",
+        message_id: "db-sel-option-all",
+    },
+    SelectionOption {
+        id: "last",
+        message_id: "db-sel-option-last",
+    },
+    SelectionOption {
+        id: "previous",
+        message_id: "db-sel-option-previous",
+    },
+    SelectionOption {
+        id: "window",
+        message_id: "db-sel-option-window",
+    },
+    SelectionOption {
+        id: "crossing",
+        message_id: "db-sel-option-crossing",
+    },
+    SelectionOption {
+        id: "wpolygon",
+        message_id: "db-sel-option-wpolygon",
+    },
+    SelectionOption {
+        id: "cpolygon",
+        message_id: "db-sel-option-cpolygon",
+    },
+    SelectionOption {
+        id: "fence",
+        message_id: "db-sel-option-fence",
+    },
+    SelectionOption {
+        id: "add",
+        message_id: "db-sel-option-add",
+    },
+    SelectionOption {
+        id: "remove",
+        message_id: "db-sel-option-remove",
+    },
+    SelectionOption {
+        id: "multiple",
+        message_id: "db-sel-option-multiple",
+    },
+    SelectionOption {
+        id: "single",
+        message_id: "db-sel-option-single",
+    },
+    SelectionOption {
+        id: "undo",
+        message_id: "db-sel-option-undo",
+    },
+];
