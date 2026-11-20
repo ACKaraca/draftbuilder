@@ -20,3 +20,4 @@ draftbuilder-history-ran = Ran: { $command }
 draftbuilder-history-cancelled = Cancelled: { $command }
 draftbuilder-history-undo = Undo
 draftbuilder-history-redo = Redo
+draftbuilder-history-restored = Restored { $count } erased objects

@@ -17,3 +17,4 @@ draftbuilder-history-ran = Çalıştırıldı: { $command }
 draftbuilder-history-cancelled = İptal edildi: { $command }
 draftbuilder-history-undo = Geri al
 draftbuilder-history-redo = Yinele
+draftbuilder-history-restored = Silinen { $count } nesne geri getirildi

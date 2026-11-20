@@ -125,6 +125,25 @@ pub mod codes {
         category: Category::Conflict,
         message_id: "db-cmd-nothing-to-undo",
     };
+    /// OOPS found no erased object to bring back: no erase is left to restore, or all of its
+    /// objects are live again.
+    pub const NOTHING_TO_RESTORE: ErrorCode = ErrorCode {
+        code: "db.cmd.nothing_to_restore",
+        category: Category::Conflict,
+        message_id: "db-cmd-nothing-to-restore",
+    };
+    /// A history word (UNDO, REDO, OOPS) with a malformed count, name or argument.
+    pub const HISTORY_FORM: ErrorCode = ErrorCode {
+        code: "db.cmd.history_form",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-history-form",
+    };
+    /// UNDO ENDGROUP with no group open that this session opened.
+    pub const NO_GROUP_OPEN: ErrorCode = ErrorCode {
+        code: "db.cmd.no_group_open",
+        category: Category::Conflict,
+        message_id: "db-cmd-no-group-open",
+    };
     /// A tangent object is not a line, segment or circle, the objects the tangent constructions
     /// accept.
     pub const TANGENT_OBJECT: ErrorCode = ErrorCode {
@@ -311,6 +330,9 @@ pub mod codes {
         POINTS_COLLINEAR,
         NO_SOLUTION,
         NOTHING_TO_UNDO,
+        NOTHING_TO_RESTORE,
+        HISTORY_FORM,
+        NO_GROUP_OPEN,
         TANGENT_OBJECT,
         COPY_ASSOCIATED,
         GEOMETRY_UNSUPPORTED,

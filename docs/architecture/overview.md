@@ -376,7 +376,7 @@ with their own codes. Geometry changes use `arc-geom` (`trim`, `extend`, `split_
 | Path array | `draftbuilder.modify.array_path` (`ARRAYPATH`) | A path entity (which must not be a source) with a count (1 to 10,000) or a spacing; alignment with the path; the source rules of the rectangular array | Divide and measure as separate prompts; the prompt form takes a count only |
 | Array editing | Array editing (ARRAYEDIT) | Not built | Parameter, source and item editing needs the array grips and an edit prompt machine, which are not in the product yet |
 | Array storage compatibility | Arrays are stored as the foundation stores them, with a block definition holding the items. The DXF save writes each item as a block reference (one `INSERT` per item, at the item's placement) and reports the array as approximated (`draft.dxf.array_approximated`): the counts, spacings, angles and paths are not written; the save result's `arrays_as_references` field counts them | Exploding an array is refused |
-| Erase | `draftbuilder.modify.erase` (`ERASE`, `E`) | Erases entities on unlocked layers; an entity another entity refers to is refused (`db.cmd.erase_dependent`) unless that entity is erased too. The refusal is part of every erase: trim, break, join, offset, mirror and explode erase through the same check; undo restores the erased entities | The restore-last-erased command (undo covers it) |
+| Erase | `draftbuilder.modify.erase` (`ERASE`, `E`) | Erases entities on unlocked layers; an entity another entity refers to is refused (`db.cmd.erase_dependent`) unless that entity is erased too. The refusal is part of every erase: trim, break, join, offset, mirror and explode erase through the same check; undo restores the erased entities | Restore of erased block definitions and wblock objects (`OOPS` restores the entities of the last erase; see [Undo directives](#undo-directives)) |
 | Explode | `draftbuilder.modify.explode` (`EXPLODE`, `X`) | Polylines without widths into lines and arcs; block references into their entities, placed by the reference (uniform scale, or a scale that differs only in sign). A by-block component takes the reference's effective value: the reference's own value, or, when the reference is by-layer, the value of the reference's layer, written explicitly because the component keeps its own layer. Layer-0 components take the reference's layer | Arrays, dimensions, hatches, text, tables, leaders and regions are refused with `db.cmd.explode_unsupported`; block attribute values are refused |
 | Property-controlled explode | Property-controlled explode | Not built | The appearance option of the components is not written yet (no command) |
 | Duplicate removal | `draftbuilder.modify.overkill` (`OVERKILL`) | LINE entities that share owner, header (name, partition, flags), layer, color, linetype, linetype scale, lineweight, transparency, plot style, visibility, elevation, thickness and extrusion (draw order is not compared, since it differs between any two lines drawn in turn): duplicates, and overlapping, touching or chained collinear lines, merged within a tolerance (the default is the drawing's linear tolerance, or `tolerance`) by one sort-and-sweep per collinear group. The first line of a run keeps its identifier and takes the run's whole extent in its own direction, the others are erased, and a keeper whose geometry is already the extent is not rewritten; a merge that would erase a dependent is refused before any write; the result lists `changed` and `erased`. Other kinds in the selection are left unchanged. A locked line is refused; a line another entity refers to is refused (`db.cmd.erase_dependent`) | Arcs, circles and polyline segments; the ignore-properties and break-polyline options |
@@ -518,6 +518,44 @@ Foundation gaps in this area, reported to the foundation and not compensated in 
   `$SNAPANG`): `arc-io-dwg`'s header mapping passes them unconverted; the product does not guess the
   source's units.
 
+## Undo directives
+
+`draftbuilder-commands::undo` reads the typed history words (`vocabulary::history_words`) and runs them
+against the document's undo manager, for the script runner and the interaction controller alike. The
+forms are:
+
+- `UNDO [count]`, `U [count]` and `REDO [count]`, with a count of 1 to 1,000 written without a sign.
+  A count is one transaction and so one undo step: `UNDO 3` undoes three steps in one commit, and
+  `REDO 3` redoes three in one commit, which then forms one undo step of its own. A count above the
+  stack fails with the foundation's `doc.undo.sequence_invalid` and changes nothing.
+- `UNDO MARK name` sets a mark at the top of the undo stack; `UNDO BACK name` undoes the steps above it,
+  and does nothing when the stack is already at the mark. A name is at most 128 bytes.
+- `UNDO GROUP name` opens a group whose later commands form one undo step; `UNDO ENDGROUP` closes the
+  innermost group. Groups nest, and the outermost one is the step.
+- `OOPS` restores the objects removed by the most recent erase and reports how many came back. With
+  nothing to restore it fails with `db.cmd.nothing_to_restore`.
+
+A malformed form fails with `db.cmd.history_form`. Every form needs the `edit` permission.
+
+Only the restore records a command name in the journal (`history.restore_erased`). Steps, marks and
+groups leave no record of their own: undo and redo records are the foundation's, marks are session
+state of the document, and a group is a property of the records its commands write. Marks and groups
+are not stored.
+
+The history operations are the document's own, not commands, so they stay outside the protocol: the
+protocol still offers only `history.undo` and `history.redo`, one step each.
+
+The controller counts the groups it opens (`Controller::open_groups`, also in `Outputs::open_groups`)
+and refuses `UNDO ENDGROUP` for a group it did not open (`db.cmd.no_group_open`). A host closes the
+controller's open groups with `Controller::close_groups(document)` before it drops the controller or
+replaces the document. The controller holds no document, so dropping it alone cannot end a group on
+a document that lives on. A script ends the groups it opened when it finishes, and refuses an
+`UNDO ENDGROUP` it did not open.
+
+A waiting command is cancelled only when a history form changes the drawing. A refused form, or a
+back-to-mark that stepped nothing, leaves the command at its prompt. A point, distance, or selection
+prompt reads `UNDO n` as its own answer, so the history is not stepped from inside a prompt.
+
 ## Scripts and workflows
 
 A script is a text file of typed command lines run by `draftbuilder-commands::script` through
@@ -538,9 +576,9 @@ arc-command's `CommandLine`, the same driver a user types into. Each line is one
   base and direction, limits, aperture, the echo and the rest) is refused with
   `db.cmd.setting_not_transparent`; the same setting is set normally when no prompt waits. Other
   commands are refused with `cmd.transparent.refused`;
-- `UNDO` (or `U`) and `REDO`, with an optional count, step the document's history through
-  `arc_command::history`, as the protocol's `history.undo` and `history.redo` do. No registered command
-  undoes yet;
+- the undo directives of [Undo directives](#undo-directives): `UNDO` (or `U`) and `REDO` with an
+  optional count, `UNDO MARK`, `UNDO BACK`, `UNDO GROUP`, `UNDO ENDGROUP` and `OOPS`. A group left open
+  at the end of the script is closed there;
 - `PICKTOLERANCE <length>` sets the distance, in drawing units, within which a point picks an object
   (default 1e-3; a positive value up to 1e6);
 - before each line the session's context units follow the drawing (a bare number is read in the
@@ -685,6 +723,8 @@ the selection methods.
   gathered set is bounded by the selection limit (10,000, `db.cmd.limit_exceeded`).
 - Shift-click (`Event::ShiftClick`) removes the object under the pointer from the selection, or, at a
   selection prompt, from the collection of multiple mode.
+- `Event::History` carries one undo directive, and a typed undo word read with no command waiting does
+  the same (see [Undo directives](#undo-directives)); `undo_steps` lists the stacks for a host to show.
 - A lasso (`Event::Lasso`, the free-hand outline from the press to the release, in meters) selects by
   window polygon when the drag ends at or right of its start, else by crossing polygon, with the same
   gestures as a prompt polygon. Vertices within the linear tolerance (`Tolerance::DEFAULT`) of the one

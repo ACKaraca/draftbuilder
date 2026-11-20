@@ -35,6 +35,8 @@
 //! - [`Event::Redo`]: steps the document forward (a waiting command is cancelled first).
 //! - [`Event::Undo`]: steps back one prompt answer of the active command, else steps the document's
 //!   history.
+//! - [`Event::History`] and the typed history words (`UNDO n`, `UNDO MARK`, `UNDO BACK`, `UNDO GROUP`,
+//!   `UNDO ENDGROUP`, `OOPS`) read with no command waiting: see [`crate::undo`].
 //!
 //! Every command runs through [`arc_command::Invoker`], so the rules of the registry hold for
 //! typed, pointer and repeated runs alike.
@@ -139,6 +141,10 @@ pub enum Event {
     Undo,
     /// Redo: one step of the document history forward; a waiting command is cancelled first.
     Redo,
+    /// A history directive (DB-DBASE-038, 039): a counted undo or redo, back to a mark, a group
+    /// boundary, or restore of the last erased objects. A waiting command is cancelled first when
+    /// the directive steps or restores.
+    History(crate::undo::Request),
     /// Up: recalls the input line before the one recalled last (the newest first); the text is in
     /// [`Outputs::recalled`].
     RecallPrevious,
@@ -187,6 +193,8 @@ pub enum LineRole {
     Undo,
     /// A redo step; the text is the identifier of the command it restored, or empty.
     Redo,
+    /// Objects restored by OOPS; the text is their number.
+    Restored,
 }
 
 /// One line of the command history.
@@ -339,6 +347,8 @@ pub struct Outputs {
     pub dynamic: Option<DynamicOut>,
     /// The selection set, in order.
     pub selection: Vec<ObjectId>,
+    /// The undo groups the controller has open (DB-DBASE-038); a host shows them while one is open.
+    pub open_groups: usize,
     /// The resolved cursor, for the status display.
     pub cursor: Option<CursorOut>,
     /// The point modifier that waits for a point, when one does.

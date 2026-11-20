@@ -87,6 +87,8 @@ pub struct Controller {
     /// The identifier of the command the last step ran on, for the history line of one that failed.
     running: Option<String>,
     seed: u64,
+    /// The undo groups this controller opened and has not closed.
+    open_groups: usize,
 }
 
 impl Controller {
@@ -113,6 +115,7 @@ impl Controller {
             gather: Gather::default(),
             running: None,
             seed: 1,
+            open_groups: 0,
         })
     }
 
@@ -200,6 +203,7 @@ impl Controller {
             Event::Lasso { path } => self.lasso(document, &path, &mut errors),
             Event::Undo => self.undo(document, &mut errors),
             Event::Redo => self.redo(document, &mut errors),
+            Event::History(request) => self.history(document, request, &mut errors),
             Event::RecallPrevious => self.recall_previous(),
             Event::RecallNext => self.recall_next(),
             Event::ClearHistory => {
@@ -252,6 +256,15 @@ impl Controller {
             role: LineRole::Input,
             text: text.to_owned(),
         });
+        if self.line.active().is_none()
+            && let Some(parsed) = crate::undo::parse(text)
+        {
+            match parsed {
+                Ok(request) => self.history(document, request, errors),
+                Err(error) => errors.push(error_out(&error)),
+            }
+            return;
+        }
         if let Some(id) = self.selection_keyword(text) {
             self.select_keyword(document, id, errors);
             return;
@@ -605,6 +618,12 @@ impl Controller {
     /// Redo steps the document history forward. A waiting command is cancelled first, since a
     /// redo has no prompt answer to step back from.
     fn redo(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
+        self.cancel_waiting();
+        self.step_history(document, Direction::Redo, errors);
+    }
+
+    /// Cancels the waiting command, if any, and records the cancellation in the history.
+    fn cancel_waiting(&mut self) {
         if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
             let cancelled = self.line.cancel();
             if matches!(cancelled, Submitted::Cancelled) {
@@ -615,7 +634,103 @@ impl Controller {
             }
             self.command_ended();
         }
-        self.step_history(document, Direction::Redo, errors);
+    }
+
+    /// The steps of the undo and redo stacks, the next to step first, at most `limit` of each.
+    /// Needs the session's `read` permission.
+    ///
+    /// # Errors
+    ///
+    /// `cmd.permission_denied` without `read`.
+    pub fn undo_steps(
+        &self,
+        document: &Document,
+        limit: usize,
+    ) -> Result<arc_command::history::StepList> {
+        history::list(document, &self.session, limit)
+    }
+
+    /// A history directive ([`crate::undo`]). A step or a restore first cancels the waiting command,
+    /// as redo does, and then ends the command as an undo does; marks and groups change no drawing
+    /// and leave the command alone.
+    fn history(
+        &mut self,
+        document: &Document,
+        request: crate::undo::Request,
+        errors: &mut Vec<ErrorOut>,
+    ) {
+        use crate::undo::Request;
+        if matches!(request, Request::EndGroup) && self.open_groups == 0 {
+            errors.push(error_out(&Error::new(codes::NO_GROUP_OPEN)));
+            return;
+        }
+        let applied = match crate::undo::apply(document, &self.session, &request) {
+            Ok(applied) => applied,
+            Err(error) => {
+                errors.push(error_out(&error));
+                return;
+            }
+        };
+        match request {
+            Request::BeginGroup(_) => self.open_groups += 1,
+            Request::EndGroup => self.open_groups = self.open_groups.saturating_sub(1),
+            _ => {}
+        }
+        // A step or a restore that changed the drawing ends the waiting command, as redo does. A
+        // failed one, or a back-to-mark that stepped nothing, leaves the command as it was.
+        let changed = match request {
+            Request::Step { .. } | Request::RestoreErased => true,
+            Request::BackToMark(_) => applied.steps > 0,
+            Request::SetMark(_) | Request::BeginGroup(_) | Request::EndGroup => false,
+        };
+        if changed {
+            self.cancel_waiting();
+            self.command_ended();
+        }
+        let line = match &request {
+            Request::Step {
+                direction: Direction::Redo,
+                ..
+            } => Some(HistoryLine {
+                role: LineRole::Redo,
+                text: applied.command.unwrap_or_default(),
+            }),
+            Request::Step { .. } => Some(HistoryLine {
+                role: LineRole::Undo,
+                text: applied.command.unwrap_or_default(),
+            }),
+            Request::BackToMark(_) if applied.steps > 0 => Some(HistoryLine {
+                role: LineRole::Undo,
+                text: String::new(),
+            }),
+            Request::RestoreErased => Some(HistoryLine {
+                role: LineRole::Restored,
+                text: applied.restored.to_string(),
+            }),
+            _ => None,
+        };
+        self.history.extend(line);
+    }
+
+    /// The undo groups this controller has open and has not closed. A host shows them.
+    #[must_use]
+    pub fn open_groups(&self) -> usize {
+        self.open_groups
+    }
+
+    /// Closes the undo groups this controller opened, innermost first, on `document`, and returns
+    /// how many it closed. A host calls it before it drops the controller or replaces the document
+    /// the controller works on: the document holds an open group until it is ended, and a later
+    /// controller on the same document would otherwise find its commands grouped. An error from the
+    /// document is not reported, since a group the document no longer holds is closed already.
+    pub fn close_groups(&mut self, document: &Document) -> usize {
+        let mut closed = 0;
+        while self.open_groups > 0 {
+            let _ = document.end_group().wait();
+            self.open_groups -= 1;
+            closed += 1;
+        }
+        closed
     }
 
     fn step_history(
@@ -1243,6 +1358,7 @@ impl Controller {
             tracking: cursor.map(|r| r.tracking.clone()).unwrap_or_default(),
             dynamic,
             selection: self.shown_selection(&snapshot),
+            open_groups: self.open_groups,
             cursor: cursor.map(|r| CursorOut {
                 point: r.point,
                 source: r.source,

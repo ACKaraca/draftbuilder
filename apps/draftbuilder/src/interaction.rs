@@ -61,6 +61,9 @@ const HISTORY_UNDO: Message = Message {
 const HISTORY_REDO: Message = Message {
     message_id: "draftbuilder-history-redo",
 };
+const HISTORY_RESTORED: Message = Message {
+    message_id: "draftbuilder-history-restored",
+};
 
 /// The interaction of one tab. Without a controller it consumes no pointer events and reports the
 /// construction error on the command line.
@@ -379,6 +382,10 @@ impl DrawingInteraction {
             ),
             LineRole::Undo => self.text(&HISTORY_UNDO, &[]),
             LineRole::Redo => self.text(&HISTORY_REDO, &[]),
+            LineRole::Restored => self.text(
+                &HISTORY_RESTORED,
+                &[("count", Value::Text(line.text.clone()))],
+            ),
         }
     }
 

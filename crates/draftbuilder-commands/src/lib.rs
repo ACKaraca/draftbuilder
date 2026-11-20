@@ -41,6 +41,7 @@ pub mod save;
 pub mod script;
 pub mod select;
 pub mod settings;
+pub mod undo;
 pub mod vocabulary;
 
 use std::path::Path;

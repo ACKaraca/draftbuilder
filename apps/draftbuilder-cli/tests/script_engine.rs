@@ -113,7 +113,7 @@ fn undo_with_nothing_to_undo_stops_the_script_and_a_bad_count_is_refused() {
     let report = h.run("NEW unit=meter\nUNDO 0\n");
     assert_eq!(
         report.failure.as_ref().unwrap().error.code(),
-        "db.cmd.script_directive"
+        "db.cmd.history_form"
     );
 }
 

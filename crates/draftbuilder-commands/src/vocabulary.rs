@@ -553,6 +553,28 @@ pub fn register_names(registry: &mut Registry, area: Area) -> Result<()> {
     Ok(())
 }
 
+/// The typed words of the history directives (DB-DBASE-038, DB-DBASE-039). They are not commands:
+/// a history step runs on the document's undo stack, outside any transaction, so they are read
+/// before a command line (see [`crate::undo`]).
+pub mod history_words {
+    /// Undo, with an optional count, or a mark, back-to-mark or group form.
+    pub const UNDO: &str = "UNDO";
+    /// The short form of [`UNDO`].
+    pub const UNDO_SHORT: &str = "U";
+    /// Redo, with an optional count.
+    pub const REDO: &str = "REDO";
+    /// Restores the objects removed by the most recent erase.
+    pub const OOPS: &str = "OOPS";
+    /// After [`UNDO`]: sets a named mark at the top of the undo stack.
+    pub const MARK: &str = "MARK";
+    /// After [`UNDO`]: undoes back to a named mark.
+    pub const BACK: &str = "BACK";
+    /// After [`UNDO`]: opens a named group whose later commands form one undo step.
+    pub const GROUP: &str = "GROUP";
+    /// After [`UNDO`]: closes the innermost open group.
+    pub const ENDGROUP: &str = "ENDGROUP";
+}
+
 /// One keyword a selection prompt takes: its identifier, which is also what the typed word names,
 /// and the message identifier of its label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

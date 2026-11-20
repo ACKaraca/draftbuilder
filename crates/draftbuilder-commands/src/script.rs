@@ -20,8 +20,9 @@
 //!   directive `PICKTOLERANCE`), as the pointer does. A selection also takes a window (`W`) or a
 //!   crossing (`C`) given by two corners. A script names an object by a point on it, since it has no
 //!   pointer and objects have no names;
-//! - `UNDO`, `U` and `REDO`, with an optional count, step the document's history
-//!   ([`arc_command::history`]), as the protocol's `history.undo` and `history.redo` do.
+//! - the history words of [`crate::undo`] step and mark the document's history: `UNDO` and `U` (with
+//!   an optional count), `REDO`, `UNDO MARK`, `UNDO BACK`, `UNDO GROUP`, `UNDO ENDGROUP` and `OOPS`.
+//!   A group left open at the end of the script is closed there, so its commands stay one step.
 //!
 //! A setting may be set beside a waiting prompt with an apostrophe only when its value cannot change
 //! the meaning of an answer already given ([`crate::settings::TRANSPARENT_SETTINGS`]); any other
@@ -35,7 +36,6 @@ use std::io::Write;
 
 use arc_base::math::Point2;
 use arc_base::{Error, ObjectId, Result, TransactionId, Unit};
-use arc_command::history::{self, Direction};
 use arc_command::{
     Accept, CommandLine, Invocation, Invoker, LineStep, Outcome, PlaneTransform, Registry, Session,
     Submitted, Target,
@@ -48,6 +48,7 @@ use crate::precision::ucs;
 use crate::select;
 use crate::select::candidates::{Candidates, Options};
 use crate::settings::{self, Value as SettingValue};
+use crate::undo;
 
 /// A fixed seed for runs that must create the same identifiers every time: the tests and the
 /// byte-identity checks. A run that names no seed takes one from the caller (the CLI draws it from the
@@ -402,12 +403,10 @@ fn picked_text(
     Ok(Some((text, skipped)))
 }
 
-/// A directive of a script: a history step or a pick tolerance. A directive is a line of its own,
-/// read while no command waits.
+/// A directive of a script: a pick tolerance. A directive is a line of its own, read while no command
+/// waits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Directive {
-    /// `UNDO` (or `U`) and `REDO` with a count of steps.
-    History(Direction, usize),
     /// `PICKTOLERANCE` with the tolerance in drawing units.
     PickTolerance(f64),
 }
@@ -418,25 +417,6 @@ fn directive(text: &str) -> Option<Result<Directive>> {
     let word = words.next()?.to_ascii_uppercase();
     let refused = || Error::new(codes::SCRIPT_DIRECTIVE);
     match word.as_str() {
-        "U" | "UNDO" | "REDO" => {
-            let direction = if word == "REDO" {
-                Direction::Redo
-            } else {
-                Direction::Undo
-            };
-            let count = match words.next() {
-                None => 1,
-                Some(text) => match text.parse::<usize>() {
-                    Ok(count) if count > 0 => count,
-                    _ => return Some(Err(refused())),
-                },
-            };
-            words
-                .next()
-                .is_none()
-                .then_some(Ok(Directive::History(direction, count)))
-                .or(Some(Err(refused())))
-        }
         "PICKTOLERANCE" => {
             let value = words.next().and_then(|text| text.parse::<f64>().ok());
             let valid =
@@ -564,6 +544,18 @@ struct Engine<'a> {
     tolerance: f64,
     skipped: u64,
     seed: u64,
+    /// The groups the script opened and has not closed.
+    open_groups: usize,
+}
+
+impl Drop for Engine<'_> {
+    /// A group the script leaves open (at a failing line or at the end) is closed, so the commands
+    /// it holds form one step and the document accepts further history steps.
+    fn drop(&mut self) {
+        for _ in 0..self.open_groups {
+            let _ = self.document.end_group().wait();
+        }
+    }
 }
 
 impl Engine<'_> {
@@ -574,21 +566,27 @@ impl Engine<'_> {
         let transform = ucs::plane_transform(&snapshot)?;
         self.line.set_transform(transform);
         if self.line.active().is_none() {
-            match directive(text) {
-                Some(Ok(Directive::History(direction, count))) => {
-                    for _ in 0..count {
-                        history::step(self.document, session, direction)?;
-                    }
-                    let command = match direction {
-                        Direction::Undo => "history.undo",
-                        Direction::Redo => "history.redo",
-                    };
-                    return Ok(Some(Ran {
-                        command: command.to_owned(),
-                        value: Value::Null,
-                        txn: None,
-                    }));
+            if let Some(parsed) = undo::parse(text) {
+                let request = parsed?;
+                // A script ends only the groups it opened; a group opened elsewhere stays open.
+                if matches!(request, undo::Request::EndGroup) && self.open_groups == 0 {
+                    return Err(Error::new(codes::NO_GROUP_OPEN));
                 }
+                let applied = undo::apply(self.document, session, &request)?;
+                match request {
+                    undo::Request::BeginGroup(_) => self.open_groups += 1,
+                    undo::Request::EndGroup => {
+                        self.open_groups = self.open_groups.saturating_sub(1)
+                    }
+                    _ => {}
+                }
+                return Ok(Some(Ran {
+                    command: applied.name.to_owned(),
+                    value: Value::Null,
+                    txn: None,
+                }));
+            }
+            match directive(text) {
                 Some(Ok(Directive::PickTolerance(tolerance))) => {
                     self.tolerance = tolerance;
                     return Ok(None);
@@ -683,6 +681,7 @@ pub fn run(
         tolerance: PICK_TOLERANCE,
         skipped: 0,
         seed,
+        open_groups: 0,
     };
     let mut last = ScriptLine {
         number: 0,
