@@ -245,8 +245,47 @@ pub mod codes {
         category: Category::LimitExceeded,
         message_id: "db-cmd-script-limit",
     };
+    /// `LAYERP` has nothing to restore: no change is kept, or every kept change no longer matches the
+    /// drawing (undo took it back, or the layer changed since).
+    pub const LAYER_PREVIOUS_NONE: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_previous_none",
+        category: Category::NotFound,
+        message_id: "db-cmd-layer-previous-none",
+    };
+    /// The command ends a layer state that is not active in this session: no isolation for
+    /// `unisolate`, no walk for `walk_end`. The detail `command` names it.
+    pub const LAYER_NOT_ACTIVE: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_not_active",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-not-active",
+    };
+    /// `LAYERP` stops at a change that was too large to keep, so it cannot step across it.
+    pub const LAYER_PREVIOUS_UNKEPT: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_previous_unkept",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-previous-unkept",
+    };
+    /// A layer record (isolation, walk) was made on another drawing, so it is neither applied nor
+    /// removed here.
+    pub const LAYER_STATE_OTHER_DRAWING: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_state_other_drawing",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-state-other-drawing",
+    };
+    /// None of the layers an isolation or walk changed can be restored: the user changed their flags
+    /// since. The record is kept.
+    pub const LAYER_STATE_CHANGED: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_state_changed",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-state-changed",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
+        LAYER_PREVIOUS_NONE,
+        LAYER_PREVIOUS_UNKEPT,
+        LAYER_STATE_OTHER_DRAWING,
+        LAYER_STATE_CHANGED,
+        LAYER_NOT_ACTIVE,
         SETTING_NOT_TRANSPARENT,
         SCRIPT_LIMIT,
         SCRIPT_PENDING,

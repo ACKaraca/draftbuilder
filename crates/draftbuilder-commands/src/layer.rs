@@ -8,8 +8,17 @@
 //! definition-point layer cannot be renamed, deleted or merged away, and names are unique without
 //! regard to case. Edits to objects on a locked layer are refused, as the foundation refuses them.
 //!
-//! Not built here, because the foundation has no record or rule for them: the current layer, layer
-//! isolation, layer states, viewport overrides and layer walk.
+//! Session state for the previous layer settings, isolation and the layer walk lives in
+//! [`session`]; viewport freezes and overrides live in [`viewport`]. Layer states that are stored in
+//! the drawing (DB-LAYER-009 to 012) and the colors of color books are not built.
+
+mod session;
+mod viewport;
+
+pub use session::{IsolateMode, IsolateParams, NoParams, WalkEndParams, WalkParams};
+pub use viewport::{
+    ClearParams, FreezeAction, FreezeParams, IsolateViewportParams, OverrideParams, Viewports,
+};
 
 use std::collections::BTreeSet;
 
@@ -136,6 +145,42 @@ fn index_color(index: u8) -> Result<u8> {
     Ok(index)
 }
 
+/// A color a layer or a viewport override takes: an index color (1 to 255) or a true color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ColorParam {
+    /// An index color, 1 to 255.
+    Index(u8),
+    /// A true color: red, green and blue, each 0 to 255.
+    TrueColor([u8; 3]),
+}
+
+/// The color value of a color parameter. An index color keeps its palette entry as its source; a
+/// true color has no source, so the drawing writes it as its RGB values (DXF group 420).
+pub(crate) fn color_value(color: ColorParam) -> Result<Value> {
+    match color {
+        ColorParam::Index(index) => Ok(indexed_color(index_color(index)?)),
+        ColorParam::TrueColor([r, g, b]) => Ok(Value::Color(Box::new(ColorValue {
+            rgba: Color::new(
+                f32::from(r) / 255.0,
+                f32::from(g) / 255.0,
+                f32::from(b) / 255.0,
+                1.0,
+            ),
+            source: None,
+        }))),
+    }
+}
+
+/// The value of field `index` of `id` as stored, for the previous-change history.
+fn stored(snapshot: &Snapshot, id: ObjectId, index: usize) -> Option<Value> {
+    snapshot
+        .resolve(id)
+        .ok()
+        .and_then(|handle| snapshot.get(handle).ok())
+        .and_then(|object| object.values.get(index).cloned().flatten())
+}
+
 /// Checks a lineweight in millimeters (0 to the foundation's maximum).
 fn lineweight(mm: f64) -> Result<f64> {
     if (0.0..=MAX_LINEWEIGHT_MM).contains(&mm) {
@@ -157,7 +202,7 @@ fn transparency(value: f64) -> Result<f64> {
 /// The properties of a layer that a command may set. Each `None` leaves the property as it is.
 #[derive(Debug, Default)]
 struct Props {
-    color: Option<u8>,
+    color: Option<ColorParam>,
     linetype: Option<String>,
     lineweight: Option<f64>,
     transparency: Option<f64>,
@@ -169,8 +214,8 @@ impl Props {
     /// The fields to write, as indices of the layer record and values, checked.
     fn fields(&self, snapshot: &Snapshot) -> Result<Vec<(usize, Option<Value>)>> {
         let mut out = Vec::new();
-        if let Some(index) = self.color {
-            out.push((layer::COLOR, Some(indexed_color(index_color(index)?))));
+        if let Some(color) = self.color {
+            out.push((layer::COLOR, Some(color_value(color)?)));
         }
         if let Some(name) = &self.linetype {
             let target = linetype_ref(snapshot, name)?;
@@ -224,9 +269,9 @@ pub struct CreateLayer {
     /// The name, unique among layers; no reserved character, at most 255 characters.
     #[schemars(length(max = 255))]
     pub name: String,
-    /// The index color, 1 to 255; the default white when absent.
+    /// The index color, 1 to 255, or a true color `[red, green, blue]`; the default white when absent.
     #[serde(default)]
-    pub color: Option<u8>,
+    pub color: Option<ColorParam>,
     /// The name of an existing linetype; continuous when absent.
     #[serde(default)]
     #[schemars(length(max = 255))]
@@ -280,9 +325,9 @@ pub struct ModifyLayers {
     /// Whether the layers plot.
     #[serde(default)]
     pub plottable: Option<bool>,
-    /// The index color, 1 to 255.
+    /// The index color, 1 to 255, or a true color `[red, green, blue]`.
     #[serde(default)]
-    pub color: Option<u8>,
+    pub color: Option<ColorParam>,
     /// The name of an existing linetype.
     #[serde(default)]
     #[schemars(length(max = 255))]
@@ -374,6 +419,11 @@ fn set_flag(
             crate::settings::refuse_current(ctx.snapshot(), *id)?;
         }
     }
+    let changes = changed(
+        ctx.snapshot(),
+        &layers,
+        &[(index, Some(Value::Bool(value)))],
+    );
     let txn = ctx.txn()?;
     for id in &layers {
         txn.modify(
@@ -382,6 +432,7 @@ fn set_flag(
             Some(Value::Bool(value)),
         )?;
     }
+    session::keep(ctx, &changes);
     Ok(Layers {
         layers: layers.into_iter().map(IdParam).collect(),
     })
@@ -427,15 +478,36 @@ fn modify(ctx: &mut Context<'_>, p: ModifyLayers) -> Result<Layers> {
             crate::settings::refuse_current(ctx.snapshot(), *id)?;
         }
     }
+    let changes = changed(ctx.snapshot(), &targets, &writes);
     let txn = ctx.txn()?;
     for id in &targets {
         for (index, value) in &writes {
             txn.modify(*id, FieldPath::new(field_name(*index)), value.clone())?;
         }
     }
+    session::keep(ctx, &changes);
     Ok(Layers {
         layers: targets.into_iter().map(IdParam).collect(),
     })
+}
+
+/// The changes that writing `writes` to each of `ids` makes: each field whose stored value differs,
+/// with the value before the change. These are what the previous-change history keeps.
+fn changed(
+    snapshot: &Snapshot,
+    ids: &[ObjectId],
+    writes: &[(usize, Option<Value>)],
+) -> Vec<session::Change> {
+    let mut out = Vec::new();
+    for id in ids {
+        for (index, value) in writes {
+            let before = stored(snapshot, *id, *index);
+            if before != *value {
+                out.push((*id, *index, before, value.clone()));
+            }
+        }
+    }
+    out
 }
 
 fn change(ctx: &mut Context<'_>, p: ChangeLayer) -> Result<Moved> {
@@ -785,7 +857,12 @@ where
 /// `cmd.duplicate` when an identifier is already registered, and the errors of
 /// [`register_names`].
 pub fn register(registry: &mut Registry) -> Result<()> {
-    for spec in record_specs().into_iter().chain(flag_specs()) {
+    let specs = record_specs()
+        .into_iter()
+        .chain(flag_specs())
+        .chain(session::specs())
+        .chain(viewport::specs());
+    for spec in specs {
         registry.register(spec)?;
     }
     register_names(registry, Area::Layer)
