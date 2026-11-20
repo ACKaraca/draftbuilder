@@ -1,12 +1,15 @@
 name: build
 
 # Started by hand. Builds the Windows applications for manual testing and keeps them as a workflow
-# artifact for two weeks. It publishes nothing: no tag, no release, no package.
+# artifact. The five newest builds are kept; GitHub removes any artifact after 90 days at the latest.
+# It publishes nothing: no tag, no release, no package.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  # Deleting the artifacts of older builds.
+  actions: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -36,5 +39,15 @@ jobs:
         with:
           name: draftbuilder-windows-${{ github.sha }}
           path: dist
-          retention-days: 14
+          retention-days: 90
           if-no-files-found: error
+      - name: Keep the five newest builds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.name | startswith("draftbuilder-windows-"))] | sort_by(.created_at) | reverse | .[5:] | .[].id' \
+            | tr -d '\r' | while read -r id; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            done
