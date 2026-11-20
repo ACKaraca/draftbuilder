@@ -184,3 +184,60 @@ pub fn entity_ids(snapshot: &Snapshot) -> Vec<String> {
     }
     out
 }
+
+/// The records of a DXF text: each record is its (code, value) pairs, the first being the `0`
+/// pair that names its type. Values are trimmed.
+pub fn dxf_records(text: &str) -> Vec<Vec<(i64, String)>> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut records: Vec<Vec<(i64, String)>> = Vec::new();
+    for pair in lines.chunks(2) {
+        let [code, value] = pair else { continue };
+        let Ok(code) = code.trim().parse::<i64>() else {
+            continue;
+        };
+        let value = value.trim().to_owned();
+        if code == 0 {
+            records.push(vec![(0, value)]);
+        } else if let Some(record) = records.last_mut() {
+            record.push((code, value));
+        }
+    }
+    records
+}
+
+/// The handle (group 5) of a record, if it has one.
+pub fn handle_of(record: &[(i64, String)]) -> Option<String> {
+    record
+        .iter()
+        .find(|(code, _)| *code == 5)
+        .map(|(_, value)| value.clone())
+}
+
+/// The handle of the table record of type `kind` whose name (group 2) is `name`.
+pub fn named_handle(text: &str, kind: &str, name: &str) -> Option<String> {
+    dxf_records(text)
+        .into_iter()
+        .find(|r| r[0].1 == kind && r.iter().any(|(c, v)| *c == 2 && v == name))
+        .and_then(|r| handle_of(&r))
+}
+
+/// The handles of every record of type `kind`, in file order.
+pub fn handles_of_kind(text: &str, kind: &str) -> Vec<String> {
+    dxf_records(text)
+        .into_iter()
+        .filter(|r| r[0].1 == kind)
+        .filter_map(|r| handle_of(&r))
+        .collect()
+}
+
+/// The handle of the line whose start x coordinate (group 10) is `x`.
+pub fn line_handle_at(text: &str, x: f64) -> Option<String> {
+    dxf_records(text)
+        .into_iter()
+        .find(|r| {
+            r[0].1 == "LINE"
+                && r.iter()
+                    .any(|(c, v)| *c == 10 && v.parse::<f64>().is_ok_and(|value| value == x))
+        })
+        .and_then(|r| handle_of(&r))
+}

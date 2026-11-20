@@ -701,3 +701,284 @@ fn a_property_change_or_a_move_on_an_object_of_a_locked_layer_is_refused() {
         json!({"objects": [line.clone()], "color": 3}),
     );
 }
+
+/// The layer of an entity, as its name.
+fn layer_name_of_entity(env: &Env, id: &str) -> String {
+    let snapshot = env.document.snapshot();
+    let handle = snapshot.resolve(id.parse().unwrap()).unwrap();
+    match snapshot.get(handle).unwrap().values[entity::LAYER].clone() {
+        Some(Value::Reference(layer_id)) => name_of(&snapshot, layer_id).unwrap(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn names_are_compared_by_one_fold_for_lookup_and_uniqueness() {
+    let mut env = Env::new();
+    let line = drawing(&mut env);
+    // Dotted and dotless i are different letters under the fold: "ÇİZGİ" is not "çizgi" (whose
+    // fold is "ÇIZGI"), but "çızgı" (dotless) is the same name as "çizgi".
+    env.run("draftbuilder.layer.create", json!({"name": "çizgi"}));
+    env.run("draftbuilder.layer.create", json!({"name": "ÇİZGİ"}));
+    for taken in ["ÇIZGI", "çızgı", "Çizgi"] {
+        assert_eq!(
+            code_of(env.invoke("draftbuilder.layer.create", json!({"name": taken}))),
+            "db.cmd.name_taken",
+            "{taken}"
+        );
+    }
+    // Lookup by name finds the same layer that uniqueness refuses.
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [line.clone()], "layer": "ÇIZGI"}),
+    );
+    assert_eq!(layer_name_of_entity(&env, &line), "çizgi");
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [line.clone()], "layer": "çİZGİ"}),
+    );
+    assert_eq!(layer_name_of_entity(&env, &line), "ÇİZGİ");
+}
+
+#[test]
+fn a_multi_character_uppercase_form_folds_the_same_in_uniqueness_and_lookup() {
+    let mut env = Env::new();
+    let line = drawing(&mut env);
+    env.run("draftbuilder.layer.create", json!({"name": "Straße"}));
+    assert_eq!(
+        code_of(env.invoke("draftbuilder.layer.create", json!({"name": "STRASSE"}))),
+        "db.cmd.name_taken"
+    );
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [line.clone()], "layer": "strasse"}),
+    );
+    assert_eq!(layer_name_of_entity(&env, &line), "Straße");
+}
+
+#[test]
+fn special_layers_are_recognized_in_any_letter_case() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    env.run("draftbuilder.layer.create", json!({"name": "DefPoints"}));
+    let defpoints = layer_named(&env, "DefPoints").to_string();
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.rename",
+            json!({"layer": defpoints.clone(), "name": "Points"})
+        )),
+        "db.cmd.layer_special"
+    );
+    assert!(has_layer(&env, "DefPoints"));
+}
+
+/// The preserved-record fixture of the purge tests: layer SPARE is named only by an unknown entity.
+const PRESERVED: &str = "  0\nSECTION\n  2\nTABLES\n  0\nTABLE\n  2\nLAYER\n  5\n10\n  0\nLAYER\n  5\n11\n  2\nSPARE\n 70\n0\n 62\n7\n  6\nCONTINUOUS\n  0\nENDTAB\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  0\nZZCUSTOM\n  5\n1A\n  8\nSPARE\n 10\n0.0\n 20\n0.0\n 30\n0.0\n  0\nENDSEC\n  0\nEOF\n";
+
+#[test]
+fn a_layer_named_by_a_preserved_record_cannot_be_renamed_deleted_or_merged() {
+    let mut env = Env::new();
+    let path = env.write("preserved-layer.dxf", PRESERVED.as_bytes());
+    env.run("draftbuilder.drawing.open", json!({"path": path}));
+    env.run("draftbuilder.layer.create", json!({"name": "Dst"}));
+    let spare = layer_named(&env, "SPARE").to_string();
+    let dst = layer_named(&env, "Dst").to_string();
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.rename",
+            json!({"layer": spare.clone(), "name": "Other"})
+        )),
+        "db.cmd.layer_preserved"
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.delete",
+            json!({"layers": [spare.clone()]})
+        )),
+        "db.cmd.layer_preserved"
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.delete_with_contents",
+            json!({"layers": [spare.clone()]})
+        )),
+        "db.cmd.layer_preserved"
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.merge",
+            json!({"sources": [spare.clone()], "target": dst})
+        )),
+        "db.cmd.layer_preserved"
+    );
+    assert!(has_layer(&env, "SPARE"));
+}
+
+#[test]
+fn a_merge_into_a_locked_target_or_a_delete_of_a_locked_layer_changes_nothing() {
+    let mut env = Env::new();
+    let line = drawing(&mut env);
+    env.run("draftbuilder.layer.create", json!({"name": "Src"}));
+    env.run("draftbuilder.layer.create", json!({"name": "Dst"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [line.clone()], "layer": "Src"}),
+    );
+    let src = layer_named(&env, "Src").to_string();
+    let dst = layer_named(&env, "Dst").to_string();
+    env.run(
+        "draftbuilder.layer.modify",
+        json!({"layers": [dst.clone()], "locked": true}),
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.merge",
+            json!({"sources": [src.clone()], "target": dst.clone()})
+        )),
+        "draft.layer.locked"
+    );
+    assert!(has_layer(&env, "Src"));
+    assert_eq!(layer_name_of_entity(&env, &line), "Src");
+    // A locked layer with contents is not deleted with them.
+    env.run(
+        "draftbuilder.layer.modify",
+        json!({"layers": [dst.clone()], "locked": false}),
+    );
+    env.run(
+        "draftbuilder.layer.lock",
+        json!({"objects": [line.clone()]}),
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.delete_with_contents",
+            json!({"layers": [src.clone()]})
+        )),
+        "draft.layer.locked"
+    );
+    assert!(has_layer(&env, "Src"));
+    assert!(
+        env.document
+            .snapshot()
+            .resolve(line.parse().unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_property_match_from_an_object_on_a_locked_layer_is_refused() {
+    let mut env = Env::new();
+    let source = drawing(&mut env);
+    env.run("draftbuilder.layer.create", json!({"name": "Locked"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [source.clone()], "layer": "Locked"}),
+    );
+    env.run(
+        "draftbuilder.layer.lock",
+        json!({"objects": [source.clone()]}),
+    );
+    let space = env.space().to_string();
+    let target = env.run(
+        "core.draft.entity.create",
+        json!({"owner": space, "geometry": {"kind": "segment", "start": [0.0, 4.0], "end": [5.0, 4.0]}}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.property.match",
+            json!({"source": source.clone(), "objects": [target.clone()]})
+        )),
+        "draft.layer.locked"
+    );
+    // The target keeps the layer it had: no layer reference was written.
+    let snapshot = env.document.snapshot();
+    let handle = snapshot.resolve(target.parse().unwrap()).unwrap();
+    assert_eq!(snapshot.get(handle).unwrap().values[entity::LAYER], None);
+}
+
+#[test]
+fn a_viewport_override_naming_a_layer_keeps_it_with_the_referrer_kind() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    let space = env.space().to_string();
+    env.run("draftbuilder.layer.create", json!({"name": "Shown"}));
+    let shown = layer_named(&env, "Shown").to_string();
+    let layout = env.run(
+        "core.draft.layout.create",
+        json!({"name": "sheet", "paper_width": 297.0, "paper_height": 210.0}),
+    );
+    let viewport = env.run(
+        "core.draft.viewport.create",
+        json!({"layout": layout["space"].clone(), "model": space,
+               "center": [100.0, 100.0], "width": 50.0, "height": 40.0}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    env.run(
+        "core.draft.viewport.modify",
+        json!({"objects": [viewport], "field": "layer_overrides",
+               "value": [[shown.clone(), false, null, null, null, null]]}),
+    );
+    let error = env
+        .invoke(
+            "draftbuilder.layer.delete",
+            json!({"layers": [shown.clone()]}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "db.cmd.layer_in_use", "{error:?}");
+    assert!(
+        format!("{error:?}").contains("core.draft.viewport"),
+        "{error:?}"
+    );
+    assert!(has_layer(&env, "Shown"));
+}
+
+#[test]
+fn delete_with_contents_refuses_when_a_dependent_dimension_sits_on_a_locked_layer() {
+    let mut env = Env::new();
+    let line = drawing(&mut env);
+    let space = env.space().to_string();
+    env.run("draftbuilder.layer.create", json!({"name": "Target"}));
+    env.run("draftbuilder.layer.create", json!({"name": "Dims"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [line.clone()], "layer": "Target"}),
+    );
+    let target = layer_named(&env, "Target").to_string();
+    let dims = layer_named(&env, "Dims").to_string();
+    let dimension = env.run(
+        "core.draft.dimension.create",
+        json!({"owner": space, "kind": "aligned",
+               "points": [{"object": line.clone(), "key": "start"}, {"position": [0.0, 3.0]}],
+               "line_position": [2.5, 4.0], "rotation": 0.0, "layer": dims}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    env.run(
+        "draftbuilder.layer.lock",
+        json!({"objects": [dimension.clone()]}),
+    );
+    assert_eq!(
+        code_of(env.invoke(
+            "draftbuilder.layer.delete_with_contents",
+            json!({"layers": [target]})
+        )),
+        "draft.layer.locked"
+    );
+    assert!(
+        env.document
+            .snapshot()
+            .resolve(line.parse().unwrap())
+            .is_ok()
+    );
+    assert!(
+        env.document
+            .snapshot()
+            .resolve(dimension.parse().unwrap())
+            .is_ok()
+    );
+}

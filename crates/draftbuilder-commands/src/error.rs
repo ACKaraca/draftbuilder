@@ -132,6 +132,13 @@ pub mod codes {
         category: Category::InvalidInput,
         message_id: "db-cmd-tangent-object",
     };
+    /// The layer is named by a preserved record of the file, which keeps the name (purge's rule):
+    /// it cannot be renamed, deleted or merged away.
+    pub const LAYER_PRESERVED: ErrorCode = ErrorCode {
+        code: "db.cmd.layer_preserved",
+        category: Category::Conflict,
+        message_id: "db-cmd-layer-preserved",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         DRAWING_NOT_EMPTY,
@@ -150,6 +157,7 @@ pub mod codes {
         NAME_TAKEN,
         LAYER_SPECIAL,
         LAYER_IN_USE,
+        LAYER_PRESERVED,
         POINTS_COLLINEAR,
         NO_SOLUTION,
         NOTHING_TO_UNDO,

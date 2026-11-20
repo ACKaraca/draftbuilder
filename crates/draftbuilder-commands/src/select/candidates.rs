@@ -72,8 +72,20 @@ pub(crate) struct Candidate {
     bounds: Option<Aabb2>,
 }
 
+/// The objects a method picked, with the entities it could not read.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Pick {
+    /// The picked objects, in draw order.
+    pub ids: Vec<ObjectId>,
+    /// The entities whose display list could not be built, so they could not be tested. They are
+    /// left out of `ids`, and the count is reported rather than hidden.
+    pub skipped: u64,
+}
+
 /// The candidates of one space, in draw order (ties by identifier), with their spatial index.
 pub(crate) struct Candidates {
+    /// The entities whose display list could not be built.
+    pub(crate) skipped: u64,
     /// The candidates, sorted by draw order and then identifier.
     pub(crate) items: Vec<Candidate>,
     /// The position of each candidate in `items`.
@@ -223,12 +235,14 @@ pub(crate) fn gather(snapshot: &Snapshot, space: ObjectId, options: Options) -> 
     }
     let default = default_layer(snapshot);
     let mut items = Vec::new();
+    let mut skipped = 0_u64;
     for id in ids {
         if flag(snapshot, id, entity::VISIBLE) == Some(false) {
             continue;
         }
-        // An entity whose display list fails is left out: it has no geometry to test.
+        // An entity whose display list fails is left out and counted in `skipped`.
         let Ok(list) = entity_list(snapshot, id, &DisplayOptions::default()) else {
+            skipped += 1;
             continue;
         };
         let own = reference(snapshot, id, entity::LAYER).or(default);
@@ -282,6 +296,7 @@ pub(crate) fn gather(snapshot: &Snapshot, space: ObjectId, options: Options) -> 
         }
     }
     Ok(Candidates {
+        skipped,
         items,
         positions,
         index,

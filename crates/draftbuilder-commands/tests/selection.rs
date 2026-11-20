@@ -565,3 +565,143 @@ fn the_space_searched_can_be_a_block_definition_as_well_as_the_model_space() {
     let not_a_space = env.invoke("draftbuilder.select.all", json!({"space": outer}));
     assert_eq!(not_a_space.unwrap_err().code(), "draft.object.wrong_type");
 }
+
+#[test]
+fn previous_keeps_only_what_the_selection_rules_allow_in_its_order() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    // d moves to a frozen layer, g becomes invisible, and a layer identifier is offered as an object.
+    let frozen = env.run("draftbuilder.layer.create", json!({"name": "Fr"}))["layers"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [f.d.clone()], "layer": "Fr"}),
+    );
+    env.run(
+        "draftbuilder.layer.freeze",
+        json!({"objects": [f.d.clone()]}),
+    );
+    env.run(
+        "core.draft.entity.modify",
+        json!({"objects": [f.g.clone()], "field": "visible", "value": false}),
+    );
+    let previous = env.run(
+        "draftbuilder.select.previous",
+        json!({"previous": [f.b.clone(), f.d.clone(), f.a.clone(), f.g.clone(), frozen, f.f.clone(), f.a.clone()]}),
+    );
+    // In the order given, each once: b, a, f. The frozen d, the invisible g and the layer are out.
+    assert_eq!(
+        previous["objects"],
+        json!([f.b.clone(), f.a.clone(), f.f.clone()]),
+        "{previous}"
+    );
+    // A locked previous object is out unless locked objects are allowed.
+    env.run("draftbuilder.layer.create", json!({"name": "Lk"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [f.a.clone()], "layer": "Lk"}),
+    );
+    env.run("draftbuilder.layer.lock", json!({"objects": [f.a.clone()]}));
+    let without = env.run(
+        "draftbuilder.select.previous",
+        json!({"previous": [f.a.clone(), f.f.clone()]}),
+    );
+    assert_eq!(names(&without), set(&[&f.f]), "{without}");
+    let with = env.run(
+        "draftbuilder.select.previous",
+        json!({"previous": [f.a.clone(), f.f.clone()], "include_locked": true}),
+    );
+    assert_eq!(names(&with), set(&[&f.a, &f.f]), "{with}");
+}
+
+#[test]
+fn a_zero_width_or_zero_height_window_is_refused_with_its_code() {
+    let mut env = Env::new();
+    fixture(&mut env);
+    for (command, params) in [
+        (
+            "draftbuilder.select.window",
+            json!({"first": [5.0, 0.0], "second": [5.0, 10.0]}),
+        ),
+        (
+            "draftbuilder.select.crossing",
+            json!({"first": [0.0, 7.0], "second": [10.0, 7.0]}),
+        ),
+    ] {
+        let error = env.invoke(command, params).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "db.cmd.selection_invalid",
+            "{command}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn the_current_set_is_limited_and_the_limit_is_named() {
+    let mut env = Env::new();
+    fixture(&mut env);
+    let too_many: Vec<String> = (0..10_001)
+        .map(|i| format!("00000000-0000-0000-0000-{i:012x}"))
+        .collect();
+    let error = env
+        .invoke(
+            "draftbuilder.select.window",
+            json!({"first": WINDOW_FIRST, "second": WINDOW_SECOND, "current": too_many}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "db.cmd.limit_exceeded", "{error:?}");
+}
+
+#[test]
+fn a_filter_value_folds_a_multi_character_uppercase_form_like_the_names_do() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    env.run("draftbuilder.layer.create", json!({"name": "Straße"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [f.a.clone()], "layer": "Straße"}),
+    );
+    let selected = env.run(
+        "draftbuilder.select.filter",
+        json!({"filter": {"test": {"property": "layer", "op": "equal", "value": "STRASSE"}}}),
+    );
+    assert_eq!(names(&selected), set(&[&f.a]), "{selected}");
+}
+
+#[test]
+fn an_entity_whose_display_list_fails_is_counted_as_skipped_not_hidden() {
+    let mut env = Env::new();
+    env.run("draftbuilder.drawing.new", json!({}));
+    let space = env.space().to_string();
+    let line = env.run(
+        "core.draft.entity.create",
+        json!({"owner": space, "geometry": {"kind": "segment", "start": [0.0, 0.0], "end": [4.0, 0.0]}}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let block = env.run(
+        "core.draft.block.define",
+        json!({"name": "FAR", "objects": [line]}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Placed so far that its transformed geometry overflows: its display list cannot be built.
+    env.run(
+        "core.draft.block.insert",
+        json!({"owner": space, "block": block, "position": [1e308, 1e308],
+               "scale": [1e308, 1e308, 1.0]}),
+    );
+    let all = env.run("draftbuilder.select.all", json!({}));
+    assert!(names(&all).is_empty(), "{all}");
+    assert_eq!(all["skipped"], json!(1), "{all}");
+    let window = env.run(
+        "draftbuilder.select.window",
+        json!({"first": [-1e300, -1e300], "second": [1e300, 1e300]}),
+    );
+    assert_eq!(window["skipped"], json!(1), "{window}");
+}

@@ -27,6 +27,7 @@
 pub mod audit;
 pub mod draw;
 pub mod error;
+pub mod fold;
 pub mod layer;
 pub mod modify;
 pub mod names;

@@ -41,3 +41,27 @@ fn opening_a_file_without_layer_zero_creates_it_and_reports_it() {
         "{opened}"
     );
 }
+
+#[test]
+fn layers_of_a_file_that_differ_only_by_case_are_kept_and_reported() {
+    let mut env = Env::new();
+    // NOTES renamed to walls: WALLS and walls are the same name under the product's fold.
+    let text = FIXTURE.replacen("  2\nNOTES\n", "  2\nwalls\n", 1);
+    assert_ne!(text, FIXTURE);
+    let path = env.write("case-duplicates.dxf", text.as_bytes());
+    let opened = env.run("draftbuilder.drawing.open_dxf", json!({"path": path}));
+    // The product reads the two names as one layer: WALLS stays, and no layer is named walls.
+    assert!(
+        has_layer(&env, "WALLS") && !has_layer(&env, "walls"),
+        "{opened}"
+    );
+    assert!(
+        reasons(&opened).contains(&"db.io.layer_name_case_duplicate".to_owned()),
+        "{opened}"
+    );
+    // Clean fixture: nothing reported.
+    let mut clean = Env::new();
+    let path = clean.write("clean.dxf", FIXTURE.as_bytes());
+    let opened = clean.run("draftbuilder.drawing.open_dxf", json!({"path": path}));
+    assert!(!reasons(&opened).contains(&"db.io.layer_name_case_duplicate".to_owned()));
+}

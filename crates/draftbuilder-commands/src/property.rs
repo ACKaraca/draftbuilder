@@ -17,7 +17,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Message, codes};
+use crate::fold::fold;
 use crate::layer::{self, Moved, refuse_locked_entity, refuse_locked_layer};
+use crate::select::candidates::reference;
 use crate::vocabulary::{Area, register_names};
 
 /// A source a property takes from its layer or its block, or a value of its own.
@@ -123,9 +125,9 @@ fn named(
         .iter_type(key)
         .ok()
         .and_then(|objects| {
-            objects.map(|(_, object)| object.id).find(|id| {
-                name_of(snapshot, Some(*id)).is_some_and(|n| n.eq_ignore_ascii_case(name))
-            })
+            objects
+                .map(|(_, object)| object.id)
+                .find(|id| name_of(snapshot, Some(*id)).is_some_and(|n| fold(&n) == fold(name)))
         })
         .ok_or_else(|| Error::new(code).with_detail("name", name))
 }
@@ -258,6 +260,11 @@ fn match_props(ctx: &mut Context<'_>, p: MatchProps) -> Result<Moved> {
         .copied()
         .ok_or_else(|| Error::new(arc_draft::error::codes::OBJECT_WRONG_TYPE))?;
     let objects = entities(snapshot, &p.objects)?;
+    // The copy also copies the source's layer, which moves every destination onto it: a locked
+    // source layer refuses the copy, as a move onto a locked layer is refused.
+    if let Some(source_layer) = reference(snapshot, source, entity::LAYER) {
+        refuse_locked_layer(snapshot, source_layer)?;
+    }
     for id in &objects {
         refuse_locked_entity(snapshot, *id)?;
     }

@@ -33,6 +33,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Message;
+use crate::fold::fold;
 
 /// The identifier of the command.
 pub const ID: &str = "draftbuilder.drawing.purge";
@@ -131,24 +132,24 @@ fn protected(category: Category, name: &str) -> bool {
         Category::Styles => &["Standard"],
         Category::Blocks => &[],
     };
-    names.iter().any(|n| n.eq_ignore_ascii_case(name))
+    names.iter().any(|n| fold(n) == fold(name))
 }
 
 /// The lower-case bytes of every preserved record of the file, which may name an object.
-fn preserved_names(snapshot: &Snapshot) -> Vec<Vec<u8>> {
+pub(crate) fn preserved_names(snapshot: &Snapshot) -> Vec<Vec<u8>> {
     snapshot
         .foreign_rows()
         .filter(|r| {
             r.source_format == draftbuilder_model::database::FORMAT
                 && matches!(r.record_kind.as_str(), "entity" | "object")
         })
-        .map(|r| r.data.to_ascii_lowercase())
+        .map(|r| fold(&String::from_utf8_lossy(&r.data)).into_bytes())
         .collect()
 }
 
 /// Whether a preserved record may name `name`.
-fn named_by_preserved(preserved: &[Vec<u8>], name: &str) -> bool {
-    let needle = name.to_ascii_lowercase().into_bytes();
+pub(crate) fn named_by_preserved(preserved: &[Vec<u8>], name: &str) -> bool {
+    let needle = fold(name).into_bytes();
     !needle.is_empty()
         && preserved
             .iter()

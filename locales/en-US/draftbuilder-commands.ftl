@@ -195,3 +195,4 @@ db-cmd-option-two-points = Two points
 db-cmd-option-undo = Undo
 db-cmd-option-vertical = Vertical
 db-cmd-option-width = Width
+db-cmd-layer-preserved = A preserved record of the file names this layer, so the layer keeps its name and cannot be renamed, deleted or merged away.

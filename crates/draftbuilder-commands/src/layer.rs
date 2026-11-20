@@ -23,6 +23,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Message, codes};
+use crate::fold::fold;
+use crate::purge;
 use crate::select::candidates::{default_layer, flag, reference};
 use crate::vocabulary::{Area, register_names};
 
@@ -50,9 +52,9 @@ fn layer_named(snapshot: &Snapshot, name: &str) -> Result<ObjectId> {
         .iter_type(LAYER)
         .ok()
         .and_then(|layers| {
-            layers.map(|(_, object)| object.id).find(|id| {
-                name_of(snapshot, Some(*id)).is_some_and(|n| n.eq_ignore_ascii_case(name))
-            })
+            layers
+                .map(|(_, object)| object.id)
+                .find(|id| name_of(snapshot, Some(*id)).is_some_and(|n| fold(&n) == fold(name)))
         })
         .ok_or_else(|| Error::new(codes::LAYER_UNKNOWN).with_detail("name", name))
 }
@@ -64,11 +66,11 @@ pub(crate) fn linetype_ref(snapshot: &Snapshot, name: &str) -> Result<Option<Obj
     let found = snapshot.iter_type(LINETYPE).ok().and_then(|types| {
         types
             .map(|(_, object)| object.id)
-            .find(|id| name_of(snapshot, Some(*id)).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+            .find(|id| name_of(snapshot, Some(*id)).is_some_and(|n| fold(&n) == fold(name)))
     });
     match found {
         Some(id) => Ok(Some(id)),
-        None if name.eq_ignore_ascii_case("Continuous") => Ok(None),
+        None if fold(name) == fold("Continuous") => Ok(None),
         None => Err(Error::new(codes::LINETYPE_UNKNOWN).with_detail("name", name)),
     }
 }
@@ -90,19 +92,21 @@ fn entities(snapshot: &Snapshot, objects: &[IdParam]) -> Result<Vec<ObjectId>> {
         .collect()
 }
 
-/// The layer of an entity: its own, or layer `0` when it names none.
-fn layer_of(snapshot: &Snapshot, id: ObjectId) -> Result<ObjectId> {
+/// The layer of an entity: its own, or the default layer `0` (resolved once by the caller) when it
+/// names none.
+fn layer_of(snapshot: &Snapshot, default: Option<ObjectId>, id: ObjectId) -> Result<ObjectId> {
     reference(snapshot, id, entity::LAYER)
-        .or_else(|| default_layer(snapshot))
+        .or(default)
         .ok_or_else(|| Error::new(codes::LAYER_UNKNOWN).with_detail("name", "0"))
 }
 
 /// The distinct layers of the entities `objects`, in their first-seen order.
 fn layers_of(snapshot: &Snapshot, objects: &[IdParam]) -> Result<Vec<ObjectId>> {
+    let default = default_layer(snapshot);
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for id in entities(snapshot, objects)? {
-        let layer_id = layer_of(snapshot, id)?;
+        let layer_id = layer_of(snapshot, default, id)?;
         if seen.insert(layer_id) {
             out.push(layer_id);
         }
@@ -447,7 +451,7 @@ fn match_layer(ctx: &mut Context<'_>, p: MatchLayer) -> Result<Moved> {
         .copied()
         .ok_or_else(|| Error::new(arc_draft::error::codes::OBJECT_WRONG_TYPE))?;
     let snapshot = ctx.snapshot();
-    let source_layer = layer_of(snapshot, source)?;
+    let source_layer = layer_of(snapshot, default_layer(snapshot), source)?;
     let objects = entities(snapshot, &p.objects)?;
     refuse_locked_layer(snapshot, source_layer)?;
     for id in &objects {
@@ -469,13 +473,6 @@ fn match_layer(ctx: &mut Context<'_>, p: MatchLayer) -> Result<Moved> {
 /// The layer names the drawing treats as special (DB-LAYER-005): layer `0` and the definition-point
 /// layer that dimensions use. Such a layer cannot be renamed, deleted or merged away.
 const SPECIAL: &[&str] = &["0", "Defpoints"];
-
-/// The form in which two layer names are compared: the standard library's full lowercase mapping,
-/// the Unicode case folding the product applies to names. Two names are the same when their forms
-/// are equal.
-fn fold(name: &str) -> String {
-    name.to_lowercase()
-}
 
 fn is_special(name: &str) -> bool {
     SPECIAL.iter().any(|special| fold(special) == fold(name))
@@ -544,21 +541,70 @@ pub(crate) fn refuse_locked_entity(snapshot: &Snapshot, id: ObjectId) -> Result<
     }
 }
 
-/// The entities whose layer is `layer_id`, in any container (block definitions included).
-fn contents(snapshot: &Snapshot, layer_id: ObjectId) -> Vec<ObjectId> {
-    let mut out = BTreeSet::new();
-    for referrer in snapshot.referrers(layer_id) {
-        let Ok(handle) = snapshot.resolve(referrer.source) else {
-            continue;
-        };
-        let is_entity = snapshot
+/// Whether the object `id` is an entity.
+fn is_entity(snapshot: &Snapshot, id: ObjectId) -> bool {
+    snapshot.resolve(id).ok().is_some_and(|handle| {
+        snapshot
             .type_key(handle)
-            .is_some_and(|key| ENTITIES.contains(&key.as_str()));
-        if is_entity {
-            out.insert(referrer.source);
+            .is_some_and(|key| ENTITIES.contains(&key.as_str()))
+    })
+}
+
+/// The entities whose layer is `layer_id`, in any container (block definitions included).
+fn contents(snapshot: &Snapshot, layer_id: ObjectId) -> BTreeSet<ObjectId> {
+    snapshot
+        .referrers(layer_id)
+        .map(|referrer| referrer.source)
+        .filter(|source| is_entity(snapshot, *source))
+        .collect()
+}
+
+/// Fails with `db.cmd.layer_preserved` when a preserved record of the file names the layer. The
+/// rule is purge's: a name that a preserved record contains keeps the layer.
+fn refuse_preserved(snapshot: &Snapshot, preserved: &[Vec<u8>], id: ObjectId) -> Result<()> {
+    let name = name_of(snapshot, Some(id)).unwrap_or_default();
+    if purge::named_by_preserved(preserved, &name) {
+        return Err(Error::new(codes::LAYER_PRESERVED).with_detail("name", name));
+    }
+    Ok(())
+}
+
+/// Fails with `db.cmd.layer_in_use`, naming the kind of the object that refers to the layer, when
+/// an object outside `removed` refers to it. Any kind counts: a viewport's layer override is a
+/// reference too.
+fn refuse_other_referrers(
+    snapshot: &Snapshot,
+    layer_id: ObjectId,
+    removed: &BTreeSet<ObjectId>,
+) -> Result<()> {
+    for referrer in snapshot.referrers(layer_id) {
+        if removed.contains(&referrer.source) {
+            continue;
+        }
+        let kind = snapshot
+            .resolve(referrer.source)
+            .ok()
+            .and_then(|handle| snapshot.type_key(handle))
+            .map_or_else(|| "unknown".to_owned(), |key| key.as_str().to_owned());
+        let name = name_of(snapshot, Some(layer_id)).unwrap_or_default();
+        return Err(Error::new(codes::LAYER_IN_USE)
+            .with_detail("name", name)
+            .with_detail("referrer", kind));
+    }
+    Ok(())
+}
+
+/// Fails with `draft.layer.locked` when an entity outside `removed` that refers to a removed entity
+/// sits on a locked layer: the removal would rewrite it (a dimension follows its geometry).
+fn refuse_locked_dependents(snapshot: &Snapshot, removed: &BTreeSet<ObjectId>) -> Result<()> {
+    for id in removed {
+        for referrer in snapshot.referrers(*id) {
+            if !removed.contains(&referrer.source) && is_entity(snapshot, referrer.source) {
+                refuse_locked_entity(snapshot, referrer.source)?;
+            }
         }
     }
-    out.into_iter().collect()
+    Ok(())
 }
 
 /// Creates layer `0` when the drawing has none (the reserved record of DB-LAYER-005) and says so.
@@ -623,8 +669,10 @@ pub struct Removed {
 
 fn rename(ctx: &mut Context<'_>, p: RenameLayer) -> Result<Layers> {
     let snapshot = ctx.snapshot();
+    let preserved = purge::preserved_names(snapshot);
     let id = layer_record(snapshot, p.layer.0)?;
     refuse_special(snapshot, id)?;
+    refuse_preserved(snapshot, &preserved, id)?;
     if !valid_name(&p.name) {
         return Err(Error::new(codes::NAME_INVALID).with_detail("name", p.name));
     }
@@ -640,13 +688,13 @@ fn rename(ctx: &mut Context<'_>, p: RenameLayer) -> Result<Layers> {
 
 fn delete(ctx: &mut Context<'_>, p: LayerList) -> Result<Layers> {
     let snapshot = ctx.snapshot();
+    let preserved = purge::preserved_names(snapshot);
     let targets = layer_records(snapshot, &p.layers)?;
+    let none = BTreeSet::new();
     for id in &targets {
         refuse_special(snapshot, *id)?;
-        if !contents(snapshot, *id).is_empty() {
-            return Err(Error::new(codes::LAYER_IN_USE)
-                .with_detail("name", name_of(snapshot, Some(*id)).unwrap_or_default()));
-        }
+        refuse_preserved(snapshot, &preserved, *id)?;
+        refuse_other_referrers(snapshot, *id, &none)?;
     }
     let txn = ctx.txn()?;
     for id in &targets {
@@ -659,45 +707,56 @@ fn delete(ctx: &mut Context<'_>, p: LayerList) -> Result<Layers> {
 
 fn delete_with_contents(ctx: &mut Context<'_>, p: LayerList) -> Result<Removed> {
     let snapshot = ctx.snapshot();
+    let preserved = purge::preserved_names(snapshot);
     let targets = layer_records(snapshot, &p.layers)?;
-    let mut objects = Vec::new();
+    let mut removed = BTreeSet::new();
     for id in &targets {
         refuse_special(snapshot, *id)?;
+        refuse_preserved(snapshot, &preserved, *id)?;
         let found = contents(snapshot, *id);
         if !found.is_empty() {
             refuse_locked_layer(snapshot, *id)?;
         }
-        objects.extend(found);
+        removed.extend(found);
     }
+    for id in &targets {
+        refuse_other_referrers(snapshot, *id, &removed)?;
+    }
+    refuse_locked_dependents(snapshot, &removed)?;
     let txn = ctx.txn()?;
-    for id in &objects {
+    for id in &removed {
         txn.delete(*id)?;
     }
     for id in &targets {
         txn.delete(*id)?;
     }
     Ok(Removed {
-        objects: objects.into_iter().map(IdParam).collect(),
+        objects: removed.into_iter().map(IdParam).collect(),
         layers: targets.into_iter().map(IdParam).collect(),
     })
 }
 
 fn merge(ctx: &mut Context<'_>, p: MergeLayers) -> Result<Layers> {
     let snapshot = ctx.snapshot();
+    let preserved = purge::preserved_names(snapshot);
     let target = layer_record(snapshot, p.target.0)?;
     let sources = layer_records(snapshot, &p.sources)?;
     if sources.contains(&target) {
         return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "target"));
     }
-    let mut moved = Vec::new();
+    let mut moved = BTreeSet::new();
     for source in &sources {
         refuse_special(snapshot, *source)?;
+        refuse_preserved(snapshot, &preserved, *source)?;
         let found = contents(snapshot, *source);
         if !found.is_empty() {
             refuse_locked_layer(snapshot, *source)?;
             refuse_locked_layer(snapshot, target)?;
         }
         moved.extend(found);
+    }
+    for source in &sources {
+        refuse_other_referrers(snapshot, *source, &moved)?;
     }
     let txn = ctx.txn()?;
     for id in &moved {

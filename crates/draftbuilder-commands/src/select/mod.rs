@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Message, codes};
 use crate::vocabulary::{Area, register_names};
-use candidates::Options;
+use candidates::{Options, Pick};
 use query::{Filter, Property, Read};
 
 /// How a selection combines with the current set the caller passes.
@@ -109,16 +109,24 @@ pub struct Everything {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Previous {
-    /// The previous set; the objects that no longer exist are dropped.
+    /// The previous set. Objects that are not selectable in `space` under the rules (frozen, off,
+    /// invisible, locked, not an entity of the space, or gone) are left out.
     #[serde(default)]
     #[schemars(length(max = 10000))]
     pub previous: Vec<IdParam>,
+    /// The space or block definition the set is checked against; the model space when absent.
+    #[serde(default)]
+    pub space: Option<IdParam>,
     /// The current set that `mode` combines with.
     #[serde(default)]
+    #[schemars(length(max = 10000))]
     pub current: Vec<IdParam>,
     /// How the picked objects combine with the current set.
     #[serde(default)]
     pub mode: Mode,
+    /// Whether objects on locked layers are picked.
+    #[serde(default)]
+    pub include_locked: bool,
 }
 
 /// Parameters of a filter selection.
@@ -180,6 +188,9 @@ pub struct Picked {
     pub picked: u64,
     /// The count of each entity type in the selection (`line`, `circle`, ...).
     pub types: BTreeMap<String, u64>,
+    /// The entities the method could not read (their display list failed), so they were not
+    /// tested and are not in `objects` unless the current set holds them.
+    pub skipped: u64,
 }
 
 /// The selection of `mode`: the picked objects replace `current`, are added to it, or are removed
@@ -212,22 +223,38 @@ pub fn combine(current: &[ObjectId], picked: &[ObjectId], mode: Mode) -> Vec<Obj
     }
 }
 
+/// The most objects one selection set may hold, as a command takes it (`current`, `previous`,
+/// `objects`) or as the protocol keeps it for a session (`MAX_SELECTED`, 10,000).
+pub const MAX_SET: usize = 10_000;
+
 fn options(include_locked: bool) -> Options {
     Options { include_locked }
+}
+
+/// The largest set a command takes: the array-length limit of the session, and at most [`MAX_SET`].
+fn set_limit(ctx: &Context<'_>) -> usize {
+    usize::try_from(ctx.limits().array_length)
+        .unwrap_or(usize::MAX)
+        .min(MAX_SET)
+}
+
+/// The identifiers of a set argument, refused with `db.cmd.limit_exceeded` above the set limit.
+fn take(ctx: &Context<'_>, list: &[IdParam]) -> Result<Vec<ObjectId>> {
+    let limit = set_limit(ctx);
+    if list.len() > limit {
+        return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", limit.to_string()));
+    }
+    Ok(list.iter().map(|IdParam(id)| *id).collect())
 }
 
 fn points(values: &[[f64; 2]]) -> Vec<Point2> {
     values.iter().map(|[x, y]| Point2::new(*x, *y)).collect()
 }
 
-fn ids(list: &[IdParam]) -> Vec<ObjectId> {
-    list.iter().map(|IdParam(id)| *id).collect()
-}
-
-/// The identifiers of `list` that name an object of `snapshot`, in their order.
-fn live(snapshot: &Snapshot, list: &[IdParam]) -> Vec<ObjectId> {
-    ids(list)
-        .into_iter()
+/// The identifiers of `ids` that name an object of `snapshot`, in their order.
+fn live(snapshot: &Snapshot, ids: &[ObjectId]) -> Vec<ObjectId> {
+    ids.iter()
+        .copied()
         .filter(|id| snapshot.resolve(*id).is_ok())
         .collect()
 }
@@ -246,19 +273,21 @@ fn space_of(snapshot: &Snapshot, space: Option<IdParam>) -> Result<ObjectId> {
     }
 }
 
-/// The result of a method: the picked objects combined with the current set by `mode`, and the
-/// count of each type in the result.
-fn finish(snapshot: &Snapshot, current: &[IdParam], picked: Vec<ObjectId>, mode: Mode) -> Picked {
-    let objects = combine(&live(snapshot, current), &picked, mode);
+/// The result of a method: the picked objects combined with the current set by `mode`, the count
+/// of each type in the result, and the entities the method could not read.
+fn finish(snapshot: &Snapshot, current: &[ObjectId], pick: Pick, mode: Mode) -> Picked {
+    let objects = combine(&live(snapshot, current), &pick.ids, mode);
+    let reader = query::Reader::new(snapshot);
     let mut types = BTreeMap::new();
     for id in &objects {
-        if let Read::Text(name) = query::read(snapshot, *id, Property::Type) {
+        if let Read::Text(name) = reader.read(*id, Property::Type) {
             *types.entry(name).or_insert(0) += 1;
         }
     }
     Picked {
         objects: objects.into_iter().map(IdParam).collect(),
-        picked: u64::try_from(picked.len()).unwrap_or(u64::MAX),
+        picked: u64::try_from(pick.ids.len()).unwrap_or(u64::MAX),
+        skipped: pick.skipped,
         types,
     }
 }
@@ -266,86 +295,97 @@ fn finish(snapshot: &Snapshot, current: &[IdParam], picked: Vec<ObjectId>, mode:
 fn rectangle(ctx: &mut Context<'_>, p: Rectangle) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
+    let current = take(ctx, &p.current)?;
     let corners = [
         Point2::new(p.first[0], p.first[1]),
         Point2::new(p.second[0], p.second[1]),
     ];
-    let picked = methods::select_window(snapshot, space, corners, &options(p.include_locked))?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    let pick = methods::select_window(snapshot, space, corners, &options(p.include_locked))?;
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn crossing(ctx: &mut Context<'_>, p: Rectangle) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
+    let current = take(ctx, &p.current)?;
     let corners = [
         Point2::new(p.first[0], p.first[1]),
         Point2::new(p.second[0], p.second[1]),
     ];
-    let picked = methods::select_crossing(snapshot, space, corners, &options(p.include_locked))?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    let pick = methods::select_crossing(snapshot, space, corners, &options(p.include_locked))?;
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn window_polygon(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = methods::select_window_polygon(
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_window_polygon(
         snapshot,
         space,
         &points(&p.points),
         &options(p.include_locked),
     )?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn crossing_polygon(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = methods::select_crossing_polygon(
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_crossing_polygon(
         snapshot,
         space,
         &points(&p.points),
         &options(p.include_locked),
     )?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn fence(ctx: &mut Context<'_>, p: Vertices) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = methods::select_fence(
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_fence(
         snapshot,
         space,
         &points(&p.points),
         &options(p.include_locked),
     )?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn all(ctx: &mut Context<'_>, p: Everything) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = methods::select_all(snapshot, space, &options(p.include_locked))?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_all(snapshot, space, &options(p.include_locked))?;
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn last(ctx: &mut Context<'_>, p: Everything) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = methods::select_last(snapshot, space, &options(p.include_locked))?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_last(snapshot, space, &options(p.include_locked))?;
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn previous(ctx: &mut Context<'_>, p: Previous) -> Result<Picked> {
     let snapshot = ctx.snapshot();
-    let picked = methods::select_previous(snapshot, &ids(&p.previous));
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    let space = space_of(snapshot, p.space)?;
+    let previous = take(ctx, &p.previous)?;
+    let current = take(ctx, &p.current)?;
+    let pick = methods::select_previous(snapshot, space, &previous, &options(p.include_locked))?;
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn filter(ctx: &mut Context<'_>, p: FilterParams) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let within = p.within_current.then(|| live(snapshot, &p.current));
-    let picked = query::select_query(
+    let current = take(ctx, &p.current)?;
+    let within = p.within_current.then(|| live(snapshot, &current));
+    let pick = query::select_query(
         snapshot,
         space,
         &p.filter,
@@ -353,20 +393,22 @@ fn filter(ctx: &mut Context<'_>, p: FilterParams) -> Result<Picked> {
         within.as_deref(),
         &options(p.include_locked),
     )?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 fn similar(ctx: &mut Context<'_>, p: Similar) -> Result<Picked> {
     let snapshot = ctx.snapshot();
     let space = space_of(snapshot, p.space)?;
-    let picked = query::select_similar(
+    let current = take(ctx, &p.current)?;
+    let objects = take(ctx, &p.objects)?;
+    let pick = query::select_similar(
         snapshot,
         space,
-        &ids(&p.objects),
+        &objects,
         &p.properties,
         &options(p.include_locked),
     )?;
-    Ok(finish(snapshot, &p.current, picked, p.mode))
+    Ok(finish(snapshot, &current, pick, p.mode))
 }
 
 /// Registers one selection command: read-only, so it creates no undo step and changes no

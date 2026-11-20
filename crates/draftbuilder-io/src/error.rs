@@ -20,8 +20,21 @@ pub const LAYER_ZERO_CREATED: Reason = Reason {
     message_id: "db-io-loss-layer-zero-created",
 };
 
+/// Layer names of the file that differ only by case. The product compares layer names without regard
+/// to case, so each such group is one name in the drawing; the report counts the groups.
+pub const LAYER_NAME_CASE_DUPLICATE: Reason = Reason {
+    code: "db.io.layer_name_case_duplicate",
+    outcome: Outcome::Mapped,
+    severity: Severity::Warning,
+    message_id: "db-io-loss-layer-name-case-duplicate",
+};
+
 /// Every reason of this crate.
-pub const ALL: &[Reason] = &[FINGERPRINT_ASSIGNED, LAYER_ZERO_CREATED];
+pub const ALL: &[Reason] = &[
+    FINGERPRINT_ASSIGNED,
+    LAYER_ZERO_CREATED,
+    LAYER_NAME_CASE_DUPLICATE,
+];
 
 #[cfg(test)]
 mod tests {

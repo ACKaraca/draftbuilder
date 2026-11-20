@@ -268,6 +268,15 @@ pub(crate) fn open_drawing(
             1,
         );
     }
+    // Layer names of the file that differ only by case are one name in the product; the report
+    // counts the groups the file has.
+    let groups = file_layer_case_groups(&output.drawing);
+    draftbuilder_io::report::note(
+        &mut plan.report,
+        draftbuilder_io::error::LAYER_NAME_CASE_DUPLICATE,
+        "layer",
+        groups,
+    );
 
     let bound = created.iter().filter_map(|c| c.source).map(|h| h.0);
     let top = bound.clone().fold(seed_top(&output.drawing), u64::max);
@@ -291,6 +300,19 @@ pub(crate) fn open_drawing(
         report: serde_json::to_value(&plan.report)
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
     })
+}
+
+/// The number of groups of layer names in the file's layer table that are equal under the product's
+/// fold but not byte for byte, each group counted once.
+pub(crate) fn file_layer_case_groups(drawing: &arc_io_dxf::Drawing) -> u64 {
+    let Some(table) = drawing.tables.layers.as_ref() else {
+        return 0;
+    };
+    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for entry in &table.entries {
+        *counts.entry(crate::fold::fold(&entry.name)).or_insert(0) += 1;
+    }
+    u64::try_from(counts.values().filter(|count| **count > 1).count()).unwrap_or(u64::MAX)
 }
 
 /// A new fingerprint: the 128 bits of a fresh identifier.

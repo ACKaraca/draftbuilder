@@ -15,8 +15,10 @@ use arc_draft_dxf::fields::name_of;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::candidates::{Options, default_layer, gather, reference};
+use super::candidates::{Options, Pick, default_layer, gather, reference};
 use crate::error::codes;
+use crate::fold::fold;
+use std::collections::BTreeSet;
 
 /// The most nested filter nodes one filter may have.
 pub const MAX_FILTER_NODES: usize = 256;
@@ -124,20 +126,42 @@ fn check_node(filter: &Filter, depth: usize, nodes: &mut usize) -> Result<()> {
     }
 }
 
-/// The value of a property of an entity, read from the snapshot.
-pub(crate) fn read(snapshot: &Snapshot, id: ObjectId, property: Property) -> Read {
+/// Reads properties of entities of one snapshot. It resolves layer `0` once, so reading many
+/// entities costs one scan of the layer table rather than one per entity.
+pub(crate) struct Reader<'a> {
+    snapshot: &'a Snapshot,
+    default: Option<ObjectId>,
+}
+
+impl<'a> Reader<'a> {
+    /// A reader of `snapshot`.
+    pub(crate) fn new(snapshot: &'a Snapshot) -> Self {
+        Self {
+            snapshot,
+            default: default_layer(snapshot),
+        }
+    }
+
+    /// The value of a property of an entity.
+    pub(crate) fn read(&self, id: ObjectId, property: Property) -> Read {
+        read_with(self, id, property)
+    }
+}
+
+fn read_with(r: &Reader<'_>, id: ObjectId, property: Property) -> Read {
+    let snapshot = r.snapshot;
     match property {
         Property::Type => Read::Text(type_name(snapshot, id)),
         Property::Layer => Read::Text(
-            layer_of(snapshot, id)
+            layer_of(r, id)
                 .and_then(|l| name_of(snapshot, Some(l)))
                 .unwrap_or_else(|| "0".to_owned()),
         ),
-        Property::Color => Read::Text(color_text(snapshot, id)),
-        Property::Linetype => Read::Text(linetype_name(snapshot, id)),
-        Property::Lineweight => Read::Number(number(snapshot, id, Appearance::Lineweight)),
-        Property::LinetypeScale => Read::Number(number(snapshot, id, Appearance::LinetypeScale)),
-        Property::Transparency => Read::Number(number(snapshot, id, Appearance::Transparency)),
+        Property::Color => Read::Text(color_text(r, id)),
+        Property::Linetype => Read::Text(linetype_name(r, id)),
+        Property::Lineweight => Read::Number(number(r, id, Appearance::Lineweight)),
+        Property::LinetypeScale => Read::Number(number(r, id, Appearance::LinetypeScale)),
+        Property::Transparency => Read::Number(number(r, id, Appearance::Transparency)),
     }
 }
 
@@ -157,8 +181,8 @@ fn type_name(snapshot: &Snapshot, id: ObjectId) -> String {
 }
 
 /// The layer of an entity: its reference, or layer `0` when it names none.
-fn layer_of(snapshot: &Snapshot, id: ObjectId) -> Option<ObjectId> {
-    reference(snapshot, id, entity::LAYER).or_else(|| default_layer(snapshot))
+fn layer_of(r: &Reader<'_>, id: ObjectId) -> Option<ObjectId> {
+    reference(r.snapshot, id, entity::LAYER).or(r.default)
 }
 
 /// The values of an object's fields, `None` when the object is gone.
@@ -167,8 +191,8 @@ fn fields(snapshot: &Snapshot, id: ObjectId) -> Option<&[Option<Value>]> {
     Some(snapshot.get(handle).ok()?.values.as_slice())
 }
 
-fn layer_fields(snapshot: &Snapshot, id: ObjectId) -> Option<&[Option<Value>]> {
-    fields(snapshot, layer_of(snapshot, id)?)
+fn layer_fields<'a>(r: &'a Reader<'_>, id: ObjectId) -> Option<&'a [Option<Value>]> {
+    fields(r.snapshot, layer_of(r, id)?)
 }
 
 fn by_of(values: &[Option<Value>], index: usize) -> By {
@@ -186,20 +210,20 @@ enum Appearance {
     Transparency,
 }
 
-fn number(snapshot: &Snapshot, id: ObjectId, appearance: Appearance) -> f64 {
-    let Some(values) = fields(snapshot, id) else {
+fn number(r: &Reader<'_>, id: ObjectId, appearance: Appearance) -> f64 {
+    let Some(values) = fields(r.snapshot, id) else {
         return 0.0;
     };
     match appearance {
         Appearance::Lineweight => by_value(
-            snapshot,
+            r,
             id,
             values,
             (entity::LINEWEIGHT_BY, entity::LINEWEIGHT, layer::LINEWEIGHT),
             0.0,
         ),
         Appearance::Transparency => by_value(
-            snapshot,
+            r,
             id,
             values,
             (
@@ -219,7 +243,7 @@ fn number(snapshot: &Snapshot, id: ObjectId, appearance: Appearance) -> f64 {
 /// The number of an appearance field read from the object when its source is ByObject, and from
 /// its layer otherwise. The indices are the source, the object's field and the layer's field.
 fn by_value(
-    snapshot: &Snapshot,
+    r: &Reader<'_>,
     id: ObjectId,
     values: &[Option<Value>],
     (by_index, own_index, layer_index): (usize, usize, usize),
@@ -229,7 +253,7 @@ fn by_value(
     let source = if own {
         Some(values)
     } else {
-        layer_fields(snapshot, id)
+        layer_fields(r, id)
     };
     let index = if own { own_index } else { layer_index };
     match source.and_then(|s| s.get(index)) {
@@ -238,22 +262,23 @@ fn by_value(
     }
 }
 
-fn linetype_name(snapshot: &Snapshot, id: ObjectId) -> String {
+fn linetype_name(r: &Reader<'_>, id: ObjectId) -> String {
+    let snapshot = r.snapshot;
     let Some(values) = fields(snapshot, id) else {
         return "Continuous".to_owned();
     };
     let target = if by_of(values, entity::LINETYPE_BY) == By::Object {
         reference(snapshot, id, entity::LINETYPE)
     } else {
-        layer_of(snapshot, id).and_then(|l| reference(snapshot, l, layer::LINETYPE))
+        layer_of(r, id).and_then(|l| reference(snapshot, l, layer::LINETYPE))
     };
     target
         .and_then(|t| name_of(snapshot, Some(t)))
         .unwrap_or_else(|| "Continuous".to_owned())
 }
 
-fn color_text(snapshot: &Snapshot, id: ObjectId) -> String {
-    let Some(values) = fields(snapshot, id) else {
+fn color_text(r: &Reader<'_>, id: ObjectId) -> String {
+    let Some(values) = fields(r.snapshot, id) else {
         return String::new();
     };
     let color_at = |values: &[Option<Value>], index: usize| match values.get(index) {
@@ -263,7 +288,7 @@ fn color_text(snapshot: &Snapshot, id: ObjectId) -> String {
     let color = if by_of(values, entity::COLOR_BY) == By::Object {
         color_at(values, entity::COLOR)
     } else {
-        layer_fields(snapshot, id).and_then(|lv| color_at(lv, layer::COLOR))
+        layer_fields(r, id).and_then(|lv| color_at(lv, layer::COLOR))
     };
     color.map_or_else(String::new, |c| {
         format!("#{}{}{}", hex(c.r), hex(c.g), hex(c.b))
@@ -284,8 +309,8 @@ fn hex(channel: f32) -> String {
 /// Whether a text matches a wildcard pattern, case-insensitively.
 #[must_use]
 pub fn wildcard_matches(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.to_lowercase().chars().collect();
-    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let p: Vec<char> = fold(pattern).chars().collect();
+    let t: Vec<char> = fold(text).chars().collect();
     let (mut pi, mut ti) = (0, 0);
     let mut star = None::<usize>;
     let mut mark = 0;
@@ -315,10 +340,10 @@ fn compare(read: &Read, op: Op, value: &str) -> Result<bool> {
     };
     match read {
         Read::Text(text) => Ok(match op {
-            Op::Equal => text.eq_ignore_ascii_case(value),
-            Op::NotEqual => !text.eq_ignore_ascii_case(value),
-            Op::Greater => text.to_lowercase() > value.to_lowercase(),
-            Op::Less => text.to_lowercase() < value.to_lowercase(),
+            Op::Equal => fold(text) == fold(value),
+            Op::NotEqual => fold(text) != fold(value),
+            Op::Greater => fold(text) > fold(value),
+            Op::Less => fold(text) < fold(value),
             Op::Wildcard => wildcard_matches(value, text),
         }),
         Read::Number(number) => {
@@ -347,16 +372,16 @@ fn compare(read: &Read, op: Op, value: &str) -> Result<bool> {
 ///
 /// `db.cmd.selection_invalid` for a number test whose value is not a finite decimal, or a
 /// wildcard on a number.
-pub fn matches(snapshot: &Snapshot, id: ObjectId, filter: &Filter) -> Result<bool> {
+pub(crate) fn matches(r: &Reader<'_>, id: ObjectId, filter: &Filter) -> Result<bool> {
     match filter {
         Filter::Test {
             property,
             op,
             value,
-        } => compare(&read(snapshot, id, *property), *op, value),
+        } => compare(&r.read(id, *property), *op, value),
         Filter::And(items) => {
             for item in items {
-                if !matches(snapshot, id, item)? {
+                if !matches(r, id, item)? {
                     return Ok(false);
                 }
             }
@@ -364,7 +389,7 @@ pub fn matches(snapshot: &Snapshot, id: ObjectId, filter: &Filter) -> Result<boo
         }
         Filter::Or(items) => {
             for item in items {
-                if matches(snapshot, id, item)? {
+                if matches(r, id, item)? {
                     return Ok(true);
                 }
             }
@@ -373,11 +398,11 @@ pub fn matches(snapshot: &Snapshot, id: ObjectId, filter: &Filter) -> Result<boo
         Filter::Xor(items) => {
             let mut holds = 0_usize;
             for item in items {
-                holds += usize::from(matches(snapshot, id, item)?);
+                holds += usize::from(matches(r, id, item)?);
             }
             Ok(holds % 2 == 1)
         }
-        Filter::Not(item) => Ok(!matches(snapshot, id, item)?),
+        Filter::Not(item) => Ok(!matches(r, id, item)?),
     }
 }
 
@@ -395,19 +420,35 @@ pub fn select_query(
     invert: bool,
     within: Option<&[ObjectId]>,
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     check(filter)?;
     let candidates = gather(snapshot, space, *options)?;
+    let scope: Option<BTreeSet<ObjectId>> = within.map(|ids| ids.iter().copied().collect());
+    let reader = Reader::new(snapshot);
     let mut out = Vec::new();
     for item in &candidates.items {
-        if within.is_some_and(|scope| !scope.contains(&item.id)) {
+        if scope.as_ref().is_some_and(|s| !s.contains(&item.id)) {
             continue;
         }
-        if matches(snapshot, item.id, filter)? != invert {
+        if matches(&reader, item.id, filter)? != invert {
             out.push(item.id);
         }
     }
-    Ok(out)
+    Ok(Pick {
+        ids: out,
+        skipped: candidates.skipped,
+    })
+}
+
+/// A profile of properties, as keys that compare exactly: the text, or the bits of the number.
+fn profile_key(values: &[Read]) -> Vec<(bool, String, u64)> {
+    values
+        .iter()
+        .map(|v| match v {
+            Read::Text(text) => (false, text.clone(), 0),
+            Read::Number(number) => (true, String::new(), number.to_bits()),
+        })
+        .collect()
 }
 
 /// The objects of `space` whose listed `properties` equal those of at least one of `reference`,
@@ -422,25 +463,37 @@ pub fn select_similar(
     reference: &[ObjectId],
     properties: &[Property],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
-    let profiles: Vec<Vec<Read>> = reference
+) -> Result<Pick> {
+    let reader = Reader::new(snapshot);
+    let profiles: BTreeSet<Vec<(bool, String, u64)>> = reference
         .iter()
         .filter(|id| snapshot.resolve(**id).is_ok())
-        .map(|id| properties.iter().map(|p| read(snapshot, *id, *p)).collect())
+        .map(|id| {
+            profile_key(
+                &properties
+                    .iter()
+                    .map(|p| reader.read(*id, *p))
+                    .collect::<Vec<_>>(),
+            )
+        })
         .collect();
     let candidates = gather(snapshot, space, *options)?;
-    Ok(candidates
+    let ids = candidates
         .items
         .iter()
         .filter(|item| {
             let own: Vec<Read> = properties
                 .iter()
-                .map(|p| read(snapshot, item.id, *p))
+                .map(|p| reader.read(item.id, *p))
                 .collect();
-            profiles.contains(&own)
+            profiles.contains(&profile_key(&own))
         })
         .map(|item| item.id)
-        .collect())
+        .collect();
+    Ok(Pick {
+        ids,
+        skipped: candidates.skipped,
+    })
 }
 
 #[cfg(test)]

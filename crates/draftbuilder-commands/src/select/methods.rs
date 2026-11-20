@@ -12,6 +12,8 @@
 //!
 //! Results are in draw order (the candidates' order), which is the order the methods return.
 
+use std::collections::BTreeSet;
+
 use arc_base::math::Point2;
 use arc_base::{Error, ObjectId, Result, Tolerance};
 use arc_doc::Snapshot;
@@ -19,7 +21,7 @@ use arc_geom::{
     Aabb2, Containment, Curve2, Intersection, Loop2, Polyline2, PolylineVertex, Segment2, intersect,
 };
 
-use super::candidates::{Candidate, Options, Part, gather};
+use super::candidates::{Options, Part, Pick, gather};
 use crate::error::codes;
 
 /// The most vertices of a window or crossing polygon, and of a fence.
@@ -27,16 +29,19 @@ pub const MAX_VERTICES: usize = 4_096;
 
 /// A closed area that a window or a crossing tests against.
 enum Area {
-    /// A rectangle, closed.
+    /// A rectangle with positive width and height, closed.
     Rect(Aabb2),
     /// A closed loop of straight segments.
     Loop(Loop2),
 }
 
+/// A boundary curve with its box, which lets a curve skip the boundary pieces it cannot meet.
+type Edge = (Curve2, Option<Aabb2>);
+
 impl Area {
-    /// The boundary as curves.
-    fn edges(&self) -> Result<Vec<Curve2>> {
-        match self {
+    /// The boundary as curves, each with its box.
+    fn edges(&self) -> Result<Vec<Edge>> {
+        let curves: Vec<Curve2> = match self {
             Self::Rect(rect) => {
                 let (a, b) = (rect.min(), rect.max());
                 let corners = [
@@ -50,10 +55,17 @@ impl Area {
                         let next = corners[(i + 1) % corners.len()];
                         Ok(Curve2::Segment(Segment2::new(corners[i], next)?))
                     })
-                    .collect()
+                    .collect::<Result<_>>()?
             }
-            Self::Loop(lp) => Ok(lp.curves().to_vec()),
-        }
+            Self::Loop(lp) => lp.curves().to_vec(),
+        };
+        Ok(curves
+            .into_iter()
+            .map(|curve| {
+                let bounds = curve.bounding_box();
+                (curve, bounds)
+            })
+            .collect())
     }
 
     /// The box of the area.
@@ -74,7 +86,7 @@ impl Area {
 }
 
 /// Whether a part lies inside `area`, and whether it meets or enters it.
-fn inside_and_touching(part: &Part, area: &Area, edges: &[Curve2]) -> Result<(bool, bool)> {
+fn inside_and_touching(part: &Part, area: &Area, edges: &[Edge]) -> Result<(bool, bool)> {
     match part {
         Part::Point(point) => {
             let inside = area.contains(*point)?;
@@ -84,11 +96,16 @@ fn inside_and_touching(part: &Part, area: &Area, edges: &[Curve2]) -> Result<(bo
     }
 }
 
-/// The exact test of a curve against an area: see the module documentation.
-fn curve_against(curve: &Curve2, area: &Area, edges: &[Curve2]) -> Result<(bool, bool)> {
+/// The exact test of a curve against an area: see the module documentation. A boundary piece whose
+/// box does not meet the curve's box cannot meet the curve, so it is not intersected.
+fn curve_against(curve: &Curve2, area: &Area, edges: &[Edge]) -> Result<(bool, bool)> {
     let tolerance = Tolerance::DEFAULT;
+    let own = curve.bounding_box();
     let mut breaks = Vec::new();
-    for edge in edges {
+    for (edge, edge_box) in edges {
+        if matches!((own, edge_box), (Some(a), Some(b)) if !a.intersects(b)) {
+            continue;
+        }
         for hit in intersect(curve, edge, &tolerance)? {
             match hit {
                 Intersection::Point { a, .. } => breaks.push(a),
@@ -142,7 +159,7 @@ fn select_in(
     area: &Area,
     crossing: bool,
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     let candidates = gather(snapshot, space, *options)?;
     let edges = area.edges()?;
     let bounds = area.bounds();
@@ -151,9 +168,9 @@ fn select_in(
     } else {
         candidates.window(&bounds)?
     };
-    let mut out = Vec::new();
+    let mut ids = Vec::new();
     for position in positions {
-        let item: &Candidate = &candidates.items[position];
+        let item = &candidates.items[position];
         let mut all = true;
         let mut any = false;
         for part in &item.parts {
@@ -162,15 +179,22 @@ fn select_in(
             any |= touching;
         }
         if (crossing && any) || (!crossing && all) {
-            out.push(item.id);
+            ids.push(item.id);
         }
     }
-    Ok(out)
+    Ok(Pick {
+        ids,
+        skipped: candidates.skipped,
+    })
 }
 
-/// The rectangle with the corners `first` and `second`.
-fn rectangle(first: Point2, second: Point2) -> Area {
-    Area::Rect(Aabb2::from_corners(first, second))
+/// The rectangle with the corners `first` and `second`. A rectangle with no width or no height has
+/// no area to test, so it is refused.
+fn rectangle(first: Point2, second: Point2) -> Result<Area> {
+    if first.x == second.x || first.y == second.y {
+        return Err(invalid("rectangle"));
+    }
+    Ok(Area::Rect(Aabb2::from_corners(first, second)))
 }
 
 /// The closed loop through `points`, in order.
@@ -199,17 +223,18 @@ fn invalid(reason: &str) -> Error {
 ///
 /// # Errors
 ///
-/// `db.cmd.limit_exceeded` and the errors of gathering, and of the geometry.
+/// `db.cmd.selection_invalid` for a rectangle with no width or height, `db.cmd.limit_exceeded`
+/// and the errors of gathering.
 pub fn select_window(
     snapshot: &Snapshot,
     space: ObjectId,
     corners: [Point2; 2],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     select_in(
         snapshot,
         space,
-        &rectangle(corners[0], corners[1]),
+        &rectangle(corners[0], corners[1])?,
         false,
         options,
     )
@@ -226,11 +251,11 @@ pub fn select_crossing(
     space: ObjectId,
     corners: [Point2; 2],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     select_in(
         snapshot,
         space,
-        &rectangle(corners[0], corners[1]),
+        &rectangle(corners[0], corners[1])?,
         true,
         options,
     )
@@ -247,7 +272,7 @@ pub fn select_window_polygon(
     space: ObjectId,
     points: &[Point2],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     select_in(snapshot, space, &polygon(points)?, false, options)
 }
 
@@ -262,7 +287,7 @@ pub fn select_crossing_polygon(
     space: ObjectId,
     points: &[Point2],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     select_in(snapshot, space, &polygon(points)?, true, options)
 }
 
@@ -277,7 +302,7 @@ pub fn select_fence(
     space: ObjectId,
     points: &[Point2],
     options: &Options,
-) -> Result<Vec<ObjectId>> {
+) -> Result<Pick> {
     if !(2..=MAX_VERTICES).contains(&points.len()) {
         return Err(invalid("fence"));
     }
@@ -288,7 +313,7 @@ pub fn select_fence(
     let fence = Curve2::Polyline(Polyline2::new(vertices, false).map_err(|_| invalid("fence"))?);
     let candidates = gather(snapshot, space, *options)?;
     let bounds = Aabb2::from_points(points.iter());
-    let mut out = Vec::new();
+    let mut ids = Vec::new();
     for position in candidates.crossing(&bounds)? {
         let item = &candidates.items[position];
         let mut hit = false;
@@ -298,10 +323,13 @@ pub fn select_fence(
             }
         }
         if hit {
-            out.push(item.id);
+            ids.push(item.id);
         }
     }
-    Ok(out)
+    Ok(Pick {
+        ids,
+        skipped: candidates.skipped,
+    })
 }
 
 /// Selects every object of `space` that the options allow.
@@ -309,13 +337,12 @@ pub fn select_fence(
 /// # Errors
 ///
 /// As [`select_window`] without geometry.
-pub fn select_all(
-    snapshot: &Snapshot,
-    space: ObjectId,
-    options: &Options,
-) -> Result<Vec<ObjectId>> {
+pub fn select_all(snapshot: &Snapshot, space: ObjectId, options: &Options) -> Result<Pick> {
     let candidates = gather(snapshot, space, *options)?;
-    Ok(candidates.items.iter().map(|item| item.id).collect())
+    Ok(Pick {
+        ids: candidates.items.iter().map(|item| item.id).collect(),
+        skipped: candidates.skipped,
+    })
 }
 
 /// Selects the topmost object of `space` that the options allow, the one drawn last. Objects are
@@ -325,27 +352,43 @@ pub fn select_all(
 /// # Errors
 ///
 /// As [`select_all`].
-pub fn select_last(
-    snapshot: &Snapshot,
-    space: ObjectId,
-    options: &Options,
-) -> Result<Vec<ObjectId>> {
+pub fn select_last(snapshot: &Snapshot, space: ObjectId, options: &Options) -> Result<Pick> {
     let candidates = gather(snapshot, space, *options)?;
-    Ok(candidates
-        .items
-        .last()
-        .map(|item| item.id)
-        .into_iter()
-        .collect())
+    Ok(Pick {
+        ids: candidates
+            .items
+            .last()
+            .map(|item| item.id)
+            .into_iter()
+            .collect(),
+        skipped: candidates.skipped,
+    })
 }
 
-/// The objects of `previous` that still exist, in their order and without repetition.
-#[must_use]
-pub fn select_previous(snapshot: &Snapshot, previous: &[ObjectId]) -> Vec<ObjectId> {
-    let mut seen = std::collections::BTreeSet::new();
-    previous
+/// The objects of `previous` that the selection rules of `space` allow, in their order and without
+/// repetition: an object that is frozen, off, invisible or locked (unless `options` allow locked
+/// objects), an identifier that names no entity of `space`, and an identifier that no longer exists
+/// are all left out, exactly as the other methods leave them out.
+///
+/// # Errors
+///
+/// As [`select_all`].
+pub fn select_previous(
+    snapshot: &Snapshot,
+    space: ObjectId,
+    previous: &[ObjectId],
+    options: &Options,
+) -> Result<Pick> {
+    let candidates = gather(snapshot, space, *options)?;
+    let allowed: BTreeSet<ObjectId> = candidates.items.iter().map(|item| item.id).collect();
+    let mut seen = BTreeSet::new();
+    let ids = previous
         .iter()
         .copied()
-        .filter(|id| snapshot.resolve(*id).is_ok() && seen.insert(*id))
-        .collect()
+        .filter(|id| allowed.contains(id) && seen.insert(*id))
+        .collect();
+    Ok(Pick {
+        ids,
+        skipped: candidates.skipped,
+    })
 }
