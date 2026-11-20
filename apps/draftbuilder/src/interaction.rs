@@ -250,6 +250,14 @@ impl DrawingInteraction {
         errors.first().map_or(Ok(()), |e| Err(error_of(e)))
     }
 
+    /// The tab's document is closing: ends the undo groups this controller left open. It changes no
+    /// document content; ending a group only moves its steps onto the undo stack.
+    pub fn closing_on(&mut self, document: &Document) {
+        if let Some(controller) = self.controller.as_mut() {
+            controller.close_groups(document);
+        }
+    }
+
     /// What the shell shows now.
     #[must_use]
     pub fn output_now(&self) -> InteractionOutput {
@@ -491,6 +499,12 @@ impl Interaction for DrawingInteraction {
 
     fn output(&self) -> InteractionOutput {
         self.output_now()
+    }
+
+    fn closing(&mut self, cx: &InteractionContext<'_>) {
+        if let Ok(document) = cx.document() {
+            self.closing_on(document);
+        }
     }
 }
 
@@ -999,6 +1013,42 @@ mod tests {
             assert!(!a.pointer_on(&document, &p, &event), "scale {scale}");
         }
         assert_eq!(a.output_now().status.answers, 0);
+    }
+
+    #[test]
+    fn a_group_left_open_is_closed_by_closing_and_undoes_as_one_step() {
+        let document = drawing(json!({"unit": "meter"}));
+        let p = edit();
+        let mut a = adapter();
+        typed(&mut a, &document, &p, "UNDO GROUP batch").unwrap();
+        typed(&mut a, &document, &p, "LINE").unwrap();
+        click(&mut a, &document, &p, [0.0, 0.0]);
+        click(&mut a, &document, &p, [10.0, 0.0]);
+        typed(&mut a, &document, &p, "").unwrap();
+        typed(&mut a, &document, &p, "LINE").unwrap();
+        click(&mut a, &document, &p, [0.0, 5.0]);
+        click(&mut a, &document, &p, [10.0, 5.0]);
+        typed(&mut a, &document, &p, "").unwrap();
+        assert_eq!(a.controller.as_ref().unwrap().open_groups(), 1);
+        assert_eq!(segments(&document).len(), 2);
+
+        let revision = document.snapshot().revision();
+        a.closing_on(&document);
+        assert_eq!(a.controller.as_ref().unwrap().open_groups(), 0);
+        assert_eq!(
+            document.snapshot().revision(),
+            revision,
+            "closing a group changes no document content"
+        );
+        assert_eq!(segments(&document).len(), 2);
+
+        let mut fresh = adapter();
+        let undo = fresh.line_on(&document, &p, LineAction::Invoke(Intent::new(EDIT_UNDO)));
+        assert!(undo.unwrap().is_none());
+        assert!(
+            segments(&document).is_empty(),
+            "the closed group undoes as one step in a fresh controller"
+        );
     }
 
     #[test]

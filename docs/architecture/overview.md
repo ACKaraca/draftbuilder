@@ -548,8 +548,10 @@ protocol still offers only `history.undo` and `history.redo`, one step each.
 The controller counts the groups it opens (`Controller::open_groups`, also in `Outputs::open_groups`)
 and refuses `UNDO ENDGROUP` for a group it did not open (`db.cmd.no_group_open`). A host closes the
 controller's open groups with `Controller::close_groups(document)` before it drops the controller or
-replaces the document. The controller holds no document, so dropping it alone cannot end a group on
-a document that lives on. A script ends the groups it opened when it finishes, and refuses an
+replaces the document. The application does so in the interaction's `closing` hook, when the shell
+closes the tab (after any save the close makes, and before the tab leaves). The hook changes no
+document content: ending a group only moves its steps onto the undo stack. The controller holds no
+document, so dropping it alone cannot end a group on a document that lives on. A script ends the groups it opened when it finishes, and refuses an
 `UNDO ENDGROUP` it did not open.
 
 A waiting command is cancelled only when a history form changes the drawing. A refused form, or a
