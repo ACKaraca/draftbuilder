@@ -186,6 +186,9 @@ pub fn config(seed: u64) -> Result<ShellConfig> {
             ..arc_ui::Appearance::default()
         },
         display: Some(arc_app::shell::DisplayProbe(Arc::new(chrome::display))),
+        overlays: None,
+        work_plane: None,
+        initial_view: None,
         toolbar: chrome::toolbar(),
         status: chrome::status(),
         seed,

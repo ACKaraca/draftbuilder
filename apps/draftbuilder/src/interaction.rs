@@ -352,7 +352,8 @@ impl DrawingInteraction {
                 .dynamic
                 .as_ref()
                 .map(|d| self.dynamic_output(d, shown)),
-            selection: shown.selection.clone(),
+            selection: Some(shown.selection.clone()),
+            inline_arguments: false,
         }
     }
 
@@ -599,6 +600,11 @@ impl DrawingInteraction {
 }
 
 impl Interaction for DrawingInteraction {
+    fn handles(&self, command: &str) -> bool {
+        // Undo, redo and clearing the selection are the controller's: undo steps back one answer.
+        matches!(command, EDIT_UNDO | EDIT_REDO | SELECT_CLEAR)
+    }
+
     fn pointer(&mut self, cx: &InteractionContext<'_>, event: &PointerEvent) -> bool {
         self.use_toggles(cx);
         match cx.document() {
