@@ -37,8 +37,12 @@ fn read(text: &str, kind: Kind, snapshot: &Snapshot, session: &Session) -> Optio
 
 /// The distance and angle, or X and Y, of a point relative to the base (or the origin) in drawing
 /// units, the angle in degrees.
-fn parts(base: Option<[f64; 2]>, cursor: [f64; 2]) -> (DynamicMode, [f64; 2]) {
+fn parts(base: Option<[f64; 2]>, cursor: [f64; 2], size: bool) -> (DynamicMode, [f64; 2]) {
     match base {
+        Some(b) if size => (
+            DynamicMode::Size,
+            [(cursor[0] - b[0]).abs(), (cursor[1] - b[1]).abs()],
+        ),
         Some(b) => {
             let (dx, dy) = (cursor[0] - b[0], cursor[1] - b[1]);
             (
@@ -105,6 +109,7 @@ impl Fields {
         session: &Session,
         base: Option<[f64; 2]>,
         cursor: [f64; 2],
+        size: bool,
     ) -> Result<[f64; 2]> {
         let mpu = meters_per_unit(snapshot);
         let cursor = [
@@ -112,8 +117,18 @@ impl Fields {
             from_meters(snapshot, cursor[1]),
         ];
         let base = base.map(|b| [from_meters(snapshot, b[0]), from_meters(snapshot, b[1])]);
-        let (mode, here) = parts(base, cursor);
+        let (mode, here) = parts(base, cursor, size);
         let (x, y) = match (mode, base) {
+            (DynamicMode::Size, Some(b)) => {
+                // The corner lies on the side of the cursor, at the typed sizes.
+                let side = |c: f64, o: f64| if c < o { -1.0 } else { 1.0 };
+                let w = self.locked(0, Kind::Length, snapshot, session, here[0], "x_size")?;
+                let h = self.locked(1, Kind::Length, snapshot, session, here[1], "y_size")?;
+                (
+                    b[0] + side(cursor[0], b[0]) * w,
+                    b[1] + side(cursor[1], b[1]) * h,
+                )
+            }
             (DynamicMode::Relative, Some(b)) => {
                 let distance =
                     self.locked(0, Kind::Length, snapshot, session, here[0], "distance")?;
@@ -137,16 +152,17 @@ impl Fields {
         session: &Session,
         base: Option<[f64; 2]>,
         cursor: [f64; 2],
+        size: bool,
     ) -> DynamicOut {
         let cursor = [
             from_meters(snapshot, cursor[0]),
             from_meters(snapshot, cursor[1]),
         ];
         let base = base.map(|b| [from_meters(snapshot, b[0]), from_meters(snapshot, b[1])]);
-        let (mode, here) = parts(base, cursor);
+        let (mode, here) = parts(base, cursor, size);
         let kinds = match mode {
             DynamicMode::Relative => [Kind::Length, Kind::Angle],
-            DynamicMode::Absolute => [Kind::Length, Kind::Length],
+            DynamicMode::Absolute | DynamicMode::Size => [Kind::Length, Kind::Length],
         };
         let field = |index: usize| FieldOut {
             value: read(&self.texts[index], kinds[index], snapshot, session).unwrap_or(here[index]),

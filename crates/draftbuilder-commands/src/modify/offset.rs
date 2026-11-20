@@ -23,9 +23,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::transform::Changed;
-use super::{
-    entities, entity_selection, erase_entities, point_answer, refuse_locked, selection_answer,
-};
+use super::{entities, entity_selection, erase_entities, point_answer, refuse_locked};
 use crate::draw::create::{Creator, done, from_meters, machine};
 use crate::error::{Message, codes};
 use crate::settings::remember::{OFFSET_DISTANCE, offered, remembering};
@@ -97,8 +95,8 @@ const DISTANCE: Message = Message {
 const THROUGH: Message = Message {
     message_id: "db-cmd-modify-offset-through",
 };
-const OBJECTS: Message = Message {
-    message_id: "db-cmd-modify-objects",
+const OBJECT: Message = Message {
+    message_id: "db-cmd-modify-offset-object",
 };
 const SIDE: Message = Message {
     message_id: "db-cmd-modify-offset-side",
@@ -327,12 +325,21 @@ fn next(state: &PromptState<'_>) -> arc_base::Result<Step> {
 
 /// The objects and, for the distance form, the side point; then the command's parameters.
 fn objects_then(state: &PromptState<'_>, mut params: serde_json::Value) -> arc_base::Result<Step> {
-    let Some(objects) = selection_answer(state, "objects") else {
-        return Ok(Step::Ask(Prompt::new(
-            "objects",
-            OBJECTS.message_id,
-            entity_selection(),
-        )));
+    // One object at a time: the next prompt asks for the next one (the window keeps offsetting).
+    let objects = match state.answer("objects") {
+        Some(PromptInput::Pick(id)) => vec![id.to_string()],
+        Some(PromptInput::Selection(ids)) => ids.iter().map(ToString::to_string).collect(),
+        _ => {
+            let types = arc_draft::types::ENTITIES
+                .iter()
+                .map(|k| (*k).to_owned())
+                .collect();
+            // A click picks one object; a window or the typed `selection` takes a set.
+            return Ok(Step::Ask(
+                Prompt::new("objects", OBJECT.message_id, Accept::Pick { types })
+                    .or(entity_selection()),
+            ));
+        }
     };
     params["objects"] = serde_json::json!(objects);
     let layer = if keyword_at(state, "layer_mode", "current") {

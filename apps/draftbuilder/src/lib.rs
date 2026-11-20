@@ -18,7 +18,9 @@ use arc_gpu::draft::{DraftOptions, extract_entity};
 use arc_gpu::extract;
 use arc_ui::{Axis, Binding, Dock, DockLayout};
 
+pub mod chrome;
 pub mod interaction;
+mod preview;
 
 /// The viewport panel.
 pub const VIEWPORT: &str = "draftbuilder.viewport";
@@ -60,6 +62,7 @@ pub fn product(clock: Arc<dyn Clock>, owner: LockOwner) -> Result<Product> {
         .with_commands(draftbuilder_commands::registry()?);
     arc_app::commands::register(builder.commands_mut())?;
     builder.last_objects(draftbuilder_commands::last_objects);
+    builder.new_document_command(draftbuilder_commands::new_drawing::ID);
     let messages = localizer(&os_locales()).ok().map(Arc::new);
     builder.interaction(move || Box::new(interaction::DrawingInteraction::new(messages.clone())));
     shell::prefs::register_settings(&mut builder)?;
@@ -158,7 +161,7 @@ pub fn config(seed: u64) -> Result<ShellConfig> {
     };
     let root = Dock::Split {
         axis: Axis::Vertical,
-        fraction: 0.8,
+        fraction: 0.7,
         first: Box::new(top),
         second: Box::new(tabs(&[COMMAND_LINE])),
     };
@@ -177,7 +180,14 @@ pub fn config(seed: u64) -> Result<ShellConfig> {
             binding("Ctrl+W", arc_app::commands::FILE_CLOSE),
             binding("Ctrl+Q", arc_app::commands::APP_QUIT),
         ],
-        appearance: arc_ui::Appearance::default(),
+        // Dark, as drafting applications are drawn; a user's choice overrides it.
+        appearance: arc_ui::Appearance {
+            theme: arc_ui::ThemeId::Dark,
+            ..arc_ui::Appearance::default()
+        },
+        display: Some(arc_app::shell::DisplayProbe(Arc::new(chrome::display))),
+        toolbar: chrome::toolbar(),
+        status: chrome::status(),
         seed,
     })
 }

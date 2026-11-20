@@ -132,7 +132,7 @@ impl Values {
                 rows.entry(name).or_insert(row);
             }
         }
-        let values = TABLE
+        let mut values: BTreeMap<&'static str, Value> = TABLE
             .iter()
             .map(|setting| {
                 let stored = match setting.scope {
@@ -148,6 +148,26 @@ impl Values {
                 )
             })
             .collect();
+        // The window's status bar toggles shadow the drawing's values while it is open.
+        for (key, name) in crate::view::TOGGLES {
+            let on = session(&crate::view::override_key(key)).and_then(|v| v.as_bool());
+            let Some(on) = on else { continue };
+            if *key == "osnap" {
+                let bits = match values.get(*name) {
+                    Some(Value::Int(bits)) => *bits,
+                    _ => 0,
+                };
+                let suppressed = crate::precision::snaps::RUNNING_SUPPRESSED;
+                let bits = if on {
+                    bits & !suppressed
+                } else {
+                    bits | suppressed
+                };
+                values.insert(*name, Value::Int(bits));
+            } else {
+                values.insert(*name, Value::Bool(on));
+            }
+        }
         Self { values }
     }
 

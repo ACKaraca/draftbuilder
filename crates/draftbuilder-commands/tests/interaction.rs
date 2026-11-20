@@ -313,7 +313,8 @@ fn the_selection_keywords_are_offered_and_an_option_activates_the_window_keyword
     assert!(prompt.options.iter().any(|o| o.id == "wpolygon"));
     send(&env, &mut c, Event::Option("window".to_owned()));
     click(&env, &mut c, 0.0, 0.0);
-    let out = click(&env, &mut c, 6.0, 6.0);
+    click(&env, &mut c, 6.0, 6.0);
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(lines(&env.document.snapshot()).len(), 2, "only a is erased");
 }
@@ -328,7 +329,8 @@ fn a_window_keyword_takes_two_corners_whatever_their_order() {
     click(&env, &mut c, 6.0, 6.0);
     let out = move_to(&env, &mut c, 0.0, 0.0);
     assert_eq!(out.band.unwrap().mode, BandMode::Window);
-    let out = click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 0.0, 0.0);
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert!(out.prompt.is_none(), "the one erase answer ran");
     let snapshot = env.document.snapshot();
@@ -344,7 +346,9 @@ fn a_crossing_keyword_takes_what_the_box_touches_whatever_the_drag_direction() {
     submit(&env, &mut c, "ERASE");
     submit(&env, &mut c, "crossing");
     click(&env, &mut c, 0.0, 0.0);
-    let out = click(&env, &mut c, 6.0, 6.0);
+    click(&env, &mut c, 6.0, 6.0);
+    // Enter finishes the selection that the box gathered.
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let snapshot = env.document.snapshot();
     assert!(snapshot.resolve(a.parse().unwrap()).is_err());
@@ -363,7 +367,8 @@ fn a_window_polygon_keyword_takes_vertices_until_an_empty_line() {
         assert!(out.errors.is_empty(), "{:?}", out.errors);
         assert!(out.prompt.is_some(), "the polygon waits for its vertices");
     }
-    // Too few vertices are refused and the polygon keeps its vertices.
+    // An empty line closes a valid polygon; a second one finishes the gathered set.
+    submit(&env, &mut c, "");
     let out = submit(&env, &mut c, "");
     assert!(out.prompt.is_none(), "an empty line closes a valid polygon");
     let snapshot = env.document.snapshot();
@@ -384,6 +389,7 @@ fn a_crossing_polygon_and_a_fence_keyword_select_what_their_outline_touches() {
         click(&env, &mut c, x, y);
     }
     submit(&env, &mut c, "");
+    submit(&env, &mut c, "");
     let snapshot = env.document.snapshot();
     assert!(snapshot.resolve(a.parse().unwrap()).is_err());
     assert!(snapshot.resolve(b.parse().unwrap()).is_err());
@@ -395,6 +401,7 @@ fn a_crossing_polygon_and_a_fence_keyword_select_what_their_outline_touches() {
     submit(&env, &mut c, "FENCE");
     click(&env, &mut c, -5.0, 2.0);
     click(&env, &mut c, 6.5, 2.0);
+    submit(&env, &mut c, "");
     let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let snapshot = env.document.snapshot();
@@ -452,10 +459,6 @@ fn remove_takes_an_object_out_of_the_gathered_set_and_add_puts_it_back() {
     submit(&env, &mut c, "remove");
     let out = click(&env, &mut c, 2.5, 2.5);
     assert!(out.selection.is_empty());
-    // An empty set is refused and the prompt keeps waiting.
-    let out = submit(&env, &mut c, "");
-    assert!(!out.errors.is_empty(), "an empty set is refused");
-    assert!(out.prompt.is_some());
     submit(&env, &mut c, "ADD");
     click(&env, &mut c, 2.5, 2.5);
     let out = submit(&env, &mut c, "");
@@ -470,13 +473,11 @@ fn escape_drops_the_gathered_set_and_keeps_the_prompt() {
     submit(&env, &mut c, "ERASE");
     submit(&env, &mut c, "multiple");
     click(&env, &mut c, 2.5, 2.5);
+    // One Escape ends the command with the set it gathered; nothing is erased.
     let out = send(&env, &mut c, Event::Escape);
     assert!(out.selection.is_empty());
-    assert!(out.prompt.is_some(), "the command still waits");
-    // Back in single mode, a click answers the prompt at once.
-    let out = click(&env, &mut c, 2.5, 2.5);
-    assert!(out.prompt.is_none());
-    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
+    assert!(out.prompt.is_none(), "one Escape cancels the command");
+    assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_ok());
 }
 
 #[test]
@@ -488,6 +489,7 @@ fn a_click_on_empty_space_at_a_selection_prompt_starts_a_window_by_drag_directio
     let out = move_to(&env, &mut c, 6.0, 6.0);
     assert_eq!(out.band.unwrap().mode, BandMode::Window);
     click(&env, &mut c, 6.0, 6.0);
+    submit(&env, &mut c, "");
     let snapshot = env.document.snapshot();
     assert!(
         snapshot.resolve(a.parse().unwrap()).is_err(),
@@ -500,6 +502,7 @@ fn a_click_on_empty_space_at_a_selection_prompt_starts_a_window_by_drag_directio
     let out = move_to(&env, &mut c, 0.0, 0.0);
     assert_eq!(out.band.unwrap().mode, BandMode::Crossing);
     click(&env, &mut c, 0.0, 0.0);
+    submit(&env, &mut c, "");
     let snapshot = env.document.snapshot();
     assert!(
         snapshot.resolve(b.parse().unwrap()).is_err(),
@@ -1324,7 +1327,8 @@ fn previous_at_a_prompt_does_not_return_a_frozen_object() {
     send(&env, &mut c, Event::Escape); // clears: previous is now a and b
     let out = submit(&env, &mut c, "ERASE");
     assert!(out.prompt.is_some());
-    let out = submit(&env, &mut c, "previous");
+    submit(&env, &mut c, "previous");
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let snapshot = env.document.snapshot();
     assert!(
@@ -1385,7 +1389,8 @@ fn a_consumed_preselection_comes_back_with_previous_after_a_cancel() {
     );
     send(&env, &mut c, Event::Escape); // cancels trim
     submit(&env, &mut c, "ERASE");
-    let out = submit(&env, &mut c, "previous");
+    submit(&env, &mut c, "previous");
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
 }
@@ -1408,7 +1413,8 @@ fn a_gesture_that_changes_nothing_keeps_the_previous_selection() {
     ); // b is not selected: nothing leaves
     let out = submit(&env, &mut c, "ERASE");
     assert!(out.prompt.is_some(), "the selection is still empty");
-    let out = submit(&env, &mut c, "previous");
+    submit(&env, &mut c, "previous");
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert!(env.document.snapshot().resolve(a.parse().unwrap()).is_err());
 }
@@ -1437,7 +1443,8 @@ fn the_typed_selection_keyword_answers_a_prompt_with_the_usable_selection() {
     submit(&env, &mut c, "OFFSET");
     let out = submit(&env, &mut c, "1");
     assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("objects"));
-    let out = submit(&env, &mut c, "selection");
+    submit(&env, &mut c, "selection");
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let prompt = out.prompt.expect("offset asks the side");
     assert_ne!(
@@ -1480,6 +1487,7 @@ fn a_lasso_while_a_polygon_is_pending_is_refused_and_keeps_its_vertices() {
     for (x, y) in [(6.0, 0.0), (6.0, 6.0), (0.0, 6.0)] {
         click(&env, &mut c, x, y);
     }
+    submit(&env, &mut c, "");
     let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert!(
@@ -1528,7 +1536,8 @@ fn a_typed_undo_steps_back_trim_from_its_target_prompt_to_the_edges_answer() {
     let edge = common::entity_ids(&env.document.snapshot())[0].clone();
 
     submit(&env, &mut c, "TRIM");
-    let out = click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 0.0, 0.0);
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
 
@@ -1536,7 +1545,8 @@ fn a_typed_undo_steps_back_trim_from_its_target_prompt_to_the_edges_answer() {
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("edges"));
 
-    let out = click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 0.0, 0.0);
+    let out = submit(&env, &mut c, "");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
 
@@ -1546,4 +1556,178 @@ fn a_typed_undo_steps_back_trim_from_its_target_prompt_to_the_edges_answer() {
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("target"));
     send(&env, &mut c, Event::Escape);
+}
+
+#[test]
+fn a_set_prompt_gathers_picks_and_windows_until_enter_and_one_escape_cancels() {
+    let (mut env, mut c) = setup();
+    let (_a, _b, _c) = selection_fixture(&mut env);
+    let before = segments(&env).len();
+    // Picks add to the set; nothing is answered until Enter.
+    submit(&env, &mut c, "ERASE");
+    let first = click(&env, &mut c, 2.5, 2.5);
+    assert_eq!(
+        first
+            .prompt
+            .as_ref()
+            .map(|p| p.expects.contains(&Expect::Selection)),
+        Some(true)
+    );
+    assert_eq!(first.selection.len(), 1, "the pick is gathered");
+    let second = click(&env, &mut c, 5.0, 10.0);
+    assert_eq!(second.selection.len(), 2, "a second pick adds to the set");
+    assert_eq!(segments(&env).len(), before, "nothing was erased yet");
+    let done = submit(&env, &mut c, "");
+    assert!(errors_of(&done).is_empty(), "{:?}", errors_of(&done));
+    assert_eq!(
+        segments(&env).len(),
+        before - 2,
+        "Enter finished the selection"
+    );
+    // Enter with nothing gathered ends the command instead of failing.
+    submit(&env, &mut c, "ERASE");
+    let none = submit(&env, &mut c, "");
+    assert!(errors_of(&none).is_empty());
+    assert!(none.prompt.is_none());
+    // One Escape ends a command that collected answers.
+    submit(&env, &mut c, "COPY");
+    click(&env, &mut c, 2.5, 2.5);
+    submit(&env, &mut c, "");
+    let out = send(&env, &mut c, Event::Escape);
+    assert!(out.prompt.is_none(), "one Escape cancels the whole command");
+}
+
+#[test]
+fn zoom_hands_the_window_a_view_request_and_leaves_the_document_alone() {
+    use draftbuilder_commands::interaction::ViewOut;
+    let (env, mut c) = setup();
+    let revision = env.document.snapshot().revision();
+    let out = submit(&env, &mut c, "Z");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(submit(&env, &mut c, "E").view, Some(ViewOut::Extents));
+    submit(&env, &mut c, "ZOOM");
+    submit(&env, &mut c, "W");
+    click(&env, &mut c, 1.0, 1.0);
+    let out = click(&env, &mut c, 3.0, 2.0);
+    assert_eq!(
+        out.view,
+        Some(ViewOut::Window {
+            a: [1.0, 1.0],
+            b: [3.0, 2.0]
+        })
+    );
+    submit(&env, &mut c, "ZOOM");
+    let out = submit(&env, &mut c, "2");
+    assert_eq!(out.view, Some(ViewOut::Scale(2.0)), "{:?}", out.errors);
+    assert_eq!(env.document.snapshot().revision(), revision);
+    assert!(
+        send(
+            &env,
+            &mut c,
+            Event::Move {
+                at: [0.0, 0.0],
+                aperture: APERTURE
+            }
+        )
+        .view
+        .is_none()
+    );
+}
+
+#[test]
+fn trim_changes_each_pick_at_once_and_asks_again_until_enter() {
+    let (mut env, mut c) = setup();
+    add_segment(&mut env, [0.0, -5.0], [0.0, 5.0]);
+    add_segment(&mut env, [-5.0, 1.0], [5.0, 1.0]);
+    add_segment(&mut env, [-5.0, -1.0], [5.0, -1.0]);
+    submit(&env, &mut c, "TRIM");
+    // The vertical segment is the one cutting edge.
+    click(&env, &mut c, 0.0, 3.0);
+    let out = submit(&env, &mut c, "");
+    assert_eq!(out.prompt.unwrap().key, "target");
+    let out = click(&env, &mut c, 3.0, 1.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.unwrap().key, "target");
+    let out = click(&env, &mut c, -3.0, -1.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let spans: Vec<(f64, f64, f64)> = segments(&env)
+        .into_iter()
+        .filter(|(a, b)| (a[1] - b[1]).abs() < 1e-9)
+        .map(|(a, b)| (a[1], a[0].min(b[0]), a[0].max(b[0])))
+        .collect();
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.0 == 1.0 && (s.1 + 5.0).abs() < 1e-9 && s.2.abs() < 1e-9)
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.0 == -1.0 && s.1.abs() < 1e-9 && (s.2 - 5.0).abs() < 1e-9)
+    );
+    // A pick on the edge itself cannot be trimmed: the history says so and it still asks.
+    let out = click(&env, &mut c, 0.0, -4.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(out.history.iter().any(|l| l.role == LineRole::Failed));
+    assert_eq!(out.prompt.unwrap().key, "target");
+    let out = submit(&env, &mut c, "");
+    assert!(out.prompt.is_none());
+    assert!(!out.history.iter().any(|l| l.role == LineRole::Cancelled));
+}
+
+#[test]
+fn a_rectangle_corner_has_two_size_fields_that_compose_the_corner_on_the_cursor_side() {
+    use draftbuilder_commands::interaction::DynamicMode;
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "RECTANG");
+    click(&env, &mut c, 1.0, 1.0);
+    let out = move_to(&env, &mut c, -4.0, 3.0);
+    let dynamic = out.dynamic.unwrap();
+    assert_eq!(dynamic.mode, DynamicMode::Size);
+    assert!(
+        (dynamic.fields[0].value - 5.0).abs() < 1e-9
+            && (dynamic.fields[1].value - 2.0).abs() < 1e-9
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "30".into(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "20".into(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let snapshot = env.document.snapshot();
+    let ids = common::entity_ids(&snapshot);
+    assert_eq!(ids.len(), 1);
+    let curve = common::curve_of_entity(&snapshot, ids[0].parse().unwrap());
+    let perimeter = arc_geom::CurveEval::length(&curve, &arc_base::Tolerance::DEFAULT).unwrap();
+    assert!((perimeter - 100.0).abs() < 1e-6, "{perimeter}");
+}
+
+#[test]
+fn a_status_toggle_snaps_the_cursor_by_the_step_without_touching_the_drawing() {
+    let (mut env, mut c) = setup();
+    let revision = env.document.snapshot().revision();
+    let at = |out: Outputs| out.cursor.unwrap().point;
+    assert!(!near(at(move_to(&env, &mut c, 12.0, 7.0)), [10.0, 10.0]));
+    // The command the status bar runs is no document change, so it is no undo step.
+    env.run(
+        "draftbuilder.view.toggle",
+        json!({"tab": "t", "name": "snap", "on": true}),
+    );
+    c.set_toggles(&[("snap", Some(true))]);
+    assert!(near(at(move_to(&env, &mut c, 12.0, 7.0)), [10.0, 10.0]));
+    c.set_toggles(&[("snap", Some(false))]);
+    assert!(!near(at(move_to(&env, &mut c, 12.0, 7.0)), [10.0, 10.0]));
+    assert_eq!(env.document.snapshot().revision(), revision);
 }

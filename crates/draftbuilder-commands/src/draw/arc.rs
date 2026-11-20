@@ -16,8 +16,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::create::{
-    Created, Creator, OPTION_ANGLE, OPTION_CENTER, OPTION_RADIUS, OPTION_SECOND, done, from_meters,
-    keyword_of, machine, option, point_of,
+    Created, Creator, OPTION_ANGLE, OPTION_CENTER, OPTION_RADIUS, done, from_meters, keyword_of,
+    machine, option, point_of,
 };
 use super::geometry::{
     arc_center_angle, arc_center_chord, arc_center_end, arc_start_end_angle, arc_start_end_radius,
@@ -172,33 +172,44 @@ fn distance(state: &PromptState<'_>, key: &str) -> Option<f64> {
 }
 
 fn next(state: &PromptState<'_>) -> Result<Step> {
-    if let Some(PromptInput::Keyword(id)) = state.answer("start")
-        && id.as_str() == "continue"
-    {
-        return continue_next(state);
+    match state.answer("start") {
+        Some(PromptInput::Keyword(id)) if id.as_str() == "continue" => {
+            return continue_next(state);
+        }
+        // Center first: the center, then the start point, then the end point.
+        Some(PromptInput::Keyword(id)) if id.as_str() == "center" => return center_first(state),
+        _ => {}
     }
+    let center_option = option("center", OPTION_CENTER, Some('c'));
     let Some(start) = point(state, "start") else {
         return match last_continuation(state.snapshot)? {
             Some(_) => {
                 let cont = option("continue", OPTION_CONTINUE, None);
                 Ok(Step::Ask(
                     Prompt::new("start", START_CONTINUE.message_id, point_accept())
-                        .or(Accept::keywords([cont])),
+                        .or(Accept::keywords([cont, center_option])),
                 ))
             }
-            None => ask("start", START, point_accept()),
+            None => Ok(Step::Ask(
+                Prompt::new("start", START.message_id, point_accept())
+                    .or(Accept::keywords([center_option])),
+            )),
         };
     };
+    // After the start point a point is the second point of a three-point arc; the keywords
+    // choose the other methods.
     let Some(method) = state.answer("method") else {
-        let second = option("second", OPTION_SECOND, Some('s'));
-        let center = option("center", OPTION_CENTER, Some('c'));
         let radius = option("radius", OPTION_RADIUS, Some('r'));
         let angle_option = option("angle", OPTION_ANGLE, Some('a'));
-        let methods = Accept::keywords([second, center, radius, angle_option]);
-        return Ok(Step::Ask(Prompt::new("method", METHOD.message_id, methods)));
+        let methods = Accept::keywords([center_option, radius, angle_option]);
+        return Ok(Step::Ask(
+            Prompt::new("method", METHOD.message_id, point_accept()).or(methods),
+        ));
     };
+    if let Some(second) = point_of(state, method) {
+        return second_next(state, start, [second.x, second.y]);
+    }
     match keyword_of(method) {
-        Some("second") => second_next(state, start),
         Some("center") => center_next(state, start),
         Some("radius") => match point(state, "end") {
             None => ask("end", END, point_accept()),
@@ -221,6 +232,22 @@ fn next(state: &PromptState<'_>) -> Result<Step> {
     }
 }
 
+/// The center-first path: center, start point, end point; counterclockwise from start to end.
+fn center_first(state: &PromptState<'_>) -> Result<Step> {
+    let Some(center) = point(state, "center") else {
+        return ask("center", POINT, point_accept());
+    };
+    let Some(start) = point(state, "from") else {
+        return ask("from", START, point_accept());
+    };
+    let Some(end) = point(state, "end") else {
+        return ask("end", END, point_accept());
+    };
+    done(serde_json::json!({
+        "shape": {"method": "start_center_end", "start": start, "center": center, "end": end}
+    }))
+}
+
 fn continue_next(state: &PromptState<'_>) -> Result<Step> {
     let Some(end) = point(state, "end") else {
         return ask("end", CONTINUE_END, point_accept());
@@ -228,10 +255,7 @@ fn continue_next(state: &PromptState<'_>) -> Result<Step> {
     done(serde_json::json!({"shape": {"method": "continue", "end": end}}))
 }
 
-fn second_next(state: &PromptState<'_>, start: [f64; 2]) -> Result<Step> {
-    let Some(second) = point(state, "second") else {
-        return ask("second", POINT, point_accept());
-    };
+fn second_next(state: &PromptState<'_>, start: [f64; 2], second: [f64; 2]) -> Result<Step> {
     let Some(end) = point(state, "end") else {
         return ask("end", END, point_accept());
     };

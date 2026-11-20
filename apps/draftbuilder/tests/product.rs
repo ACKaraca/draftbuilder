@@ -86,3 +86,28 @@ fn the_product_opens_a_dxf_drawing_and_draws_every_entity() {
     draftbuilder::config(1).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_new_document_starts_with_a_model_space_that_is_not_an_undo_step() {
+    let dir = std::env::temp_dir().join(format!("draftbuilder-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let product = draftbuilder::product(Arc::new(FixedClock(0)), owner()).unwrap();
+    let mut seed = 100_u64;
+    let config = AppConfig {
+        data_dir: dir,
+        limits: Limits::DEFAULT,
+        id_generators: Box::new(move || {
+            seed += 1;
+            IdGenerator::seeded(seed)
+        }),
+        recent: RecentFiles::new(4),
+    };
+    let mut app = Application::new(product, config);
+    let tab = app.new_document().unwrap();
+    let document = app.tab(tab).unwrap().document();
+    // Without a model space no drawing command can run; the window used to open without one.
+    assert!(draftbuilder_commands::model_space(&document.snapshot()).is_some());
+    assert!(!document.can_undo(), "undo would remove the model space");
+    assert!(!app.tab(tab).unwrap().is_dirty());
+}

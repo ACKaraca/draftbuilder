@@ -33,6 +33,8 @@ pub enum Area {
     Precision,
     /// Object properties: changing and matching the appearance of entities.
     Property,
+    /// The view: zooming.
+    View,
 }
 
 /// One row of the vocabulary.
@@ -50,6 +52,12 @@ pub struct Name {
 
 /// Every name of the product: the conventional typed names and short aliases.
 pub const NAMES: &[Name] = &[
+    Name {
+        id: "draftbuilder.view.zoom",
+        area: Area::View,
+        typed: Some("ZOOM"),
+        aliases: &["Z"],
+    },
     Name {
         id: "draftbuilder.drawing.open",
         area: Area::Drawing,
@@ -78,7 +86,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.drawing.purge",
         area: Area::Drawing,
         typed: Some("PURGE"),
-        aliases: &[],
+        aliases: &["PU"],
     },
     Name {
         id: "draftbuilder.modify.move",
@@ -180,7 +188,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.modify.array_rect",
         area: Area::Modify,
         typed: Some("ARRAYRECT"),
-        aliases: &[],
+        aliases: &["AR"],
     },
     Name {
         id: "draftbuilder.modify.array_polar",
@@ -240,13 +248,13 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.draw.line",
         area: Area::Draw,
         typed: Some("LINE"),
-        aliases: &[],
+        aliases: &["L"],
     },
     Name {
         id: "draftbuilder.draw.xline",
         area: Area::Draw,
         typed: Some("XLINE"),
-        aliases: &[],
+        aliases: &["XL"],
     },
     Name {
         id: "draftbuilder.draw.ray",
@@ -264,13 +272,13 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.draw.rectangle",
         area: Area::Draw,
         typed: Some("RECTANG"),
-        aliases: &[],
+        aliases: &["REC"],
     },
     Name {
         id: "draftbuilder.draw.polygon",
         area: Area::Draw,
         typed: Some("POLYGON"),
-        aliases: &[],
+        aliases: &["POL"],
     },
     Name {
         id: "draftbuilder.draw.circle",
@@ -282,43 +290,43 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.draw.arc",
         area: Area::Draw,
         typed: Some("ARC"),
-        aliases: &[],
+        aliases: &["A"],
     },
     Name {
         id: "draftbuilder.draw.ellipse",
         area: Area::Draw,
         typed: Some("ELLIPSE"),
-        aliases: &[],
+        aliases: &["EL"],
     },
     Name {
         id: "draftbuilder.draw.donut",
         area: Area::Draw,
         typed: Some("DONUT"),
-        aliases: &[],
+        aliases: &["DO"],
     },
     Name {
         id: "draftbuilder.draw.spline",
         area: Area::Draw,
         typed: Some("SPLINE"),
-        aliases: &[],
+        aliases: &["SPL"],
     },
     Name {
         id: "draftbuilder.draw.point",
         area: Area::Draw,
         typed: Some("POINT"),
-        aliases: &[],
+        aliases: &["PO"],
     },
     Name {
         id: "draftbuilder.draw.divide",
         area: Area::Draw,
         typed: Some("DIVIDE"),
-        aliases: &[],
+        aliases: &["DIV"],
     },
     Name {
         id: "draftbuilder.draw.measure",
         area: Area::Draw,
         typed: Some("MEASURE"),
-        aliases: &[],
+        aliases: &["ME"],
     },
     Name {
         id: "draftbuilder.draw.wipeout",
@@ -336,7 +344,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.layer.create",
         area: Area::Layer,
         typed: Some("LAYER"),
-        aliases: &[],
+        aliases: &["LA"],
     },
     Name {
         id: "draftbuilder.layer.on",
@@ -450,7 +458,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.property.summary",
         area: Area::Property,
         typed: Some("PROPERTIES"),
-        aliases: &[],
+        aliases: &["PR"],
     },
     Name {
         id: "core.draft.linetype.load",
@@ -474,7 +482,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.property.match",
         area: Area::Property,
         typed: Some("MATCHPROP"),
-        aliases: &[],
+        aliases: &["MA"],
     },
     Name {
         id: "draftbuilder.settings.setvar",
@@ -492,7 +500,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.precision.osnap",
         area: Area::Precision,
         typed: Some("OSNAP"),
-        aliases: &[],
+        aliases: &["OS"],
     },
     Name {
         id: "draftbuilder.precision.ucs",
@@ -504,7 +512,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.inquiry.distance",
         area: Area::Precision,
         typed: Some("DIST"),
-        aliases: &[],
+        aliases: &["DI"],
     },
     Name {
         id: "draftbuilder.inquiry.id",
@@ -516,7 +524,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.inquiry.area",
         area: Area::Precision,
         typed: Some("AREA"),
-        aliases: &[],
+        aliases: &["AA"],
     },
     Name {
         id: "draftbuilder.precision.units",
@@ -528,7 +536,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.inquiry.list",
         area: Area::Precision,
         typed: Some("LIST"),
-        aliases: &[],
+        aliases: &["LI"],
     },
     Name {
         id: "draftbuilder.inquiry.mass",

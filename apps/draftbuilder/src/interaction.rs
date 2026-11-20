@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use arc_app::commands::{EDIT_REDO, EDIT_UNDO, SELECT_CLEAR};
 use arc_app::locale::Localizer;
-use arc_app::shell::{DynamicOutput, Interaction, InteractionContext, InteractionOutput};
+use arc_app::shell::{
+    DynamicOutput, Interaction, InteractionContext, InteractionOutput, ViewRequest,
+};
 use arc_base::error::Value;
 use arc_base::math::Point3;
 use arc_base::{Error, ErrorCode, Result};
@@ -25,8 +27,9 @@ use arc_ui::{
 };
 use draftbuilder_commands::interaction::{
     BandMode, BandOut, Controller, CrossingPicker, DynamicMode, DynamicOut, ErrorOut, Event,
-    HistoryLine, LineRole, Outputs, meters_per_unit,
+    Expect, HistoryLine, LineRole, Outputs, ViewOut, meters_per_unit,
 };
+use draftbuilder_commands::settings::{self, store::Values};
 use serde_json::Value as Json;
 
 /// The pick aperture of a click or a hover, in pixels: the half side of the pick box.
@@ -49,6 +52,12 @@ const X: Message = Message {
 const Y: Message = Message {
     message_id: "draftbuilder-dynamic-y",
 };
+const X_SIZE: Message = Message {
+    message_id: "draftbuilder-dynamic-x-size",
+};
+const Y_SIZE: Message = Message {
+    message_id: "draftbuilder-dynamic-y-size",
+};
 const HISTORY_RAN: Message = Message {
     message_id: "draftbuilder-history-ran",
 };
@@ -60,6 +69,9 @@ const HISTORY_UNDO: Message = Message {
 };
 const HISTORY_REDO: Message = Message {
     message_id: "draftbuilder-history-redo",
+};
+const HISTORY_FAILED: Message = Message {
+    message_id: "draftbuilder-history-failed",
 };
 const HISTORY_RESTORED: Message = Message {
     message_id: "draftbuilder-history-restored",
@@ -84,6 +96,10 @@ pub struct DrawingInteraction {
     scale: f64,
     /// Formats the history lines; without it the message identifiers are shown.
     messages: Option<Arc<Localizer>>,
+    /// The view change a zoom asked for, until the shell takes it.
+    view: Option<ViewRequest>,
+    /// The digits of the drawing's length precision, for the status bar coordinates.
+    precision: usize,
 }
 
 impl DrawingInteraction {
@@ -116,6 +132,8 @@ impl DrawingInteraction {
             seen: None,
             scale: 1.0,
             messages,
+            view: None,
+            precision: 3,
         }
     }
 
@@ -141,6 +159,15 @@ impl DrawingInteraction {
                 // A hover error is not kept: the next command must not report it.
                 let _ = self.run(document, Event::Move { at, aperture });
                 false
+            }
+            // The secondary button is Enter: it finishes a selection, accepts a default, and with
+            // no command repeats the last one.
+            PointerKind::Press if event.button == Some(PointerButton::Secondary) => {
+                if self.controller.is_none() {
+                    return false;
+                }
+                self.pending = self.run(document, Event::Submit(String::new()));
+                true
             }
             PointerKind::Click if event.button == Some(PointerButton::Primary) => {
                 if self.controller.is_none() {
@@ -236,8 +263,22 @@ impl DrawingInteraction {
     pub fn refresh_on(&mut self, document: &Document) {
         self.note(document);
         if let Some(controller) = self.controller.as_mut() {
-            self.shown = controller.refresh(document);
+            let out = controller.refresh(document);
+            self.keep(out);
         }
+    }
+
+    /// Shows `out` and keeps the view change it asks for until the shell takes it.
+    fn keep(&mut self, mut out: Outputs) {
+        if let Some(view) = out.view.take() {
+            self.view = Some(match view {
+                ViewOut::Extents => ViewRequest::Extents,
+                ViewOut::Previous => ViewRequest::Previous,
+                ViewOut::Window { a, b } => ViewRequest::Window { a, b },
+                ViewOut::Scale(f) => ViewRequest::Scale(f),
+            });
+        }
+        self.shown = out;
     }
 
     /// The pending error of the last click or dynamic event, taken: reported once.
@@ -264,10 +305,21 @@ impl DrawingInteraction {
         let prompt = self
             .controller
             .as_ref()
-            .and_then(|c| c.active_prompt().cloned());
+            .and_then(|c| c.active_prompt().cloned())
+            .map(|mut p| {
+                if let Some(default) = self.default_text(&p) {
+                    p.message.args.insert("default".to_owned(), default);
+                }
+                p
+            });
         let busy = self.controller.as_ref().is_some_and(Controller::busy);
         let shown = &self.shown;
         InteractionOutput {
+            command: self
+                .controller
+                .as_ref()
+                .and_then(Controller::active_command)
+                .map(str::to_owned),
             status: LineStatus {
                 active: prompt.is_some(),
                 answers: self.controller.as_ref().map_or(0, Controller::answers),
@@ -293,12 +345,37 @@ impl DrawingInteraction {
                 parameters: Vec::new(),
             },
             history: shown.history.iter().map(|l| self.history_text(l)).collect(),
+            cursor: shown.cursor.map(|c| self.to_drawing(c.point)),
+            precision: Some(self.precision),
             overlays: self.overlays(shown),
             dynamic: shown
                 .dynamic
                 .as_ref()
                 .map(|d| self.dynamic_output(d, shown)),
             selection: shown.selection.clone(),
+        }
+    }
+
+    /// The default of `prompt` as the person reads it: a distance in drawing units, an angle in
+    /// degrees, a keyword by its label.
+    fn default_text(&self, prompt: &arc_command::prompt::Prompt) -> Option<String> {
+        use arc_command::PromptInput;
+        let number = |v: f64| {
+            let text = format!("{v:.6}");
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        };
+        match prompt.default.as_ref()? {
+            PromptInput::Distance(m) => Some(number(m / self.scale)),
+            PromptInput::Angle(r) => Some(number(r.to_degrees())),
+            PromptInput::Number(q) => Some(number(q.value())),
+            PromptInput::Keyword(id) => {
+                let option = prompt.keyword_options().find(|o| &o.id == id)?;
+                Some(match &self.messages {
+                    Some(localizer) => localizer.format(&option.label, &[]).text,
+                    None => option.label.clone(),
+                })
+            }
+            _ => None,
         }
     }
 
@@ -309,7 +386,7 @@ impl DrawingInteraction {
         };
         let mut out = controller.handle(document, event, &CrossingPicker);
         let errors = std::mem::take(&mut out.errors);
-        self.shown = out;
+        self.keep(out);
         self.note(document);
         errors
     }
@@ -339,6 +416,8 @@ impl DrawingInteraction {
         let snapshot = document.snapshot();
         self.scale = meters_per_unit(&snapshot);
         self.seen = Some(snapshot.revision());
+        let digits = Values::of(&snapshot, &|_: &str| None).int(settings::LENGTH_PRECISION);
+        self.precision = usize::try_from(digits).map_or(3, |d| d.min(12));
     }
 
     /// Before an event: hands the host's permissions to the controller, and when the document
@@ -352,7 +431,8 @@ impl DrawingInteraction {
         if let Some(controller) = self.controller.as_mut() {
             controller.set_permissions(permissions);
             if changed {
-                self.shown = controller.external_change(document);
+                let out = controller.external_change(document);
+                self.keep(out);
             }
         }
     }
@@ -382,11 +462,17 @@ impl DrawingInteraction {
         match line.role {
             LineRole::Input => line.text.clone(),
             LineRole::Command => {
-                self.text(&HISTORY_RAN, &[("command", Value::Text(line.text.clone()))])
+                // The typed name (`LINE`) reads better than the identifier the history keeps.
+                let name = typed_name(&line.text);
+                self.text(&HISTORY_RAN, &[("command", Value::Text(name))])
             }
             LineRole::Cancelled => self.text(
                 &HISTORY_CANCELLED,
-                &[("command", Value::Text(line.text.clone()))],
+                &[("command", Value::Text(typed_name(&line.text)))],
+            ),
+            LineRole::Failed => self.text(
+                &HISTORY_FAILED,
+                &[("command", Value::Text(typed_name(&line.text)))],
             ),
             LineRole::Undo => self.text(&HISTORY_UNDO, &[]),
             LineRole::Redo => self.text(&HISTORY_REDO, &[]),
@@ -401,6 +487,7 @@ impl DrawingInteraction {
         let labels = match out.mode {
             DynamicMode::Relative => [&DISTANCE, &ANGLE],
             DynamicMode::Absolute => [&X, &Y],
+            DynamicMode::Size => [&X_SIZE, &Y_SIZE],
         };
         let fields = out
             .fields
@@ -417,7 +504,9 @@ impl DrawingInteraction {
                     (false, _) => String::new(),
                 },
                 locked: field.locked,
-                focused: field.focused,
+                // The fields never take the keyboard: typed text goes to the command line, which
+                // accepts coordinates and distances; a click puts the cursor in a field.
+                focused: false,
             })
             .collect();
         DynamicOutput {
@@ -431,8 +520,34 @@ impl DrawingInteraction {
 
     fn overlays(&self, shown: &Outputs) -> Vec<ProductOverlay> {
         let mut overlays = Vec::new();
+        if shown.placed.len() > 1 {
+            overlays.push(ProductOverlay::Path {
+                points: shown
+                    .placed
+                    .iter()
+                    .map(|p| point3(self.to_drawing(*p)))
+                    .collect(),
+                dashed: false,
+            });
+        }
         if let Some(band) = shown.band {
             overlays.push(self.band_overlay(band));
+        }
+        if let (Some(cursor), Some(prompt)) = (shown.cursor, shown.prompt.as_ref()) {
+            let taken: Vec<[f64; 2]> = shown.taken.iter().map(|p| self.to_drawing(*p)).collect();
+            let radius_next =
+                prompt.expects.contains(&Expect::Value) && !prompt.expects.contains(&Expect::Point);
+            if let Some(points) = crate::preview::outline(
+                &prompt.command,
+                &taken,
+                self.to_drawing(cursor.point),
+                radius_next,
+            ) {
+                overlays.push(ProductOverlay::Path {
+                    points: points.into_iter().map(point3).collect(),
+                    dashed: false,
+                });
+            }
         }
         if let Some(snap) = shown.snap
             && let Some(kind) = marker_of(snap.kind)
@@ -469,8 +584,23 @@ impl DrawingInteraction {
     }
 }
 
+impl DrawingInteraction {
+    /// Hands the controller the status bar toggles the user switched in this tab.
+    fn use_toggles(&mut self, cx: &InteractionContext<'_>) {
+        let tab = format!("{:?}", cx.tab());
+        if let Some(controller) = self.controller.as_mut() {
+            let toggles: Vec<(&str, Option<bool>)> = draftbuilder_commands::view::TOGGLES
+                .iter()
+                .map(|(name, _)| (*name, draftbuilder_commands::view::switched(&tab, name)))
+                .collect();
+            controller.set_toggles(&toggles);
+        }
+    }
+}
+
 impl Interaction for DrawingInteraction {
     fn pointer(&mut self, cx: &InteractionContext<'_>, event: &PointerEvent) -> bool {
+        self.use_toggles(cx);
         match cx.document() {
             Ok(document) => self.pointer_on(document, &cx.session().permissions, event),
             Err(_) => false,
@@ -478,12 +608,14 @@ impl Interaction for DrawingInteraction {
     }
 
     fn dynamic(&mut self, cx: &InteractionContext<'_>, event: &DynamicEvent) {
+        self.use_toggles(cx);
         if let Ok(document) = cx.document() {
             self.dynamic_on(document, &cx.session().permissions, event);
         }
     }
 
     fn line(&mut self, cx: &InteractionContext<'_>, action: LineAction) -> Result<()> {
+        self.use_toggles(cx);
         let document = cx.document()?;
         match self.line_on(document, &cx.session().permissions, action) {
             Err(error) => Err(error),
@@ -501,11 +633,24 @@ impl Interaction for DrawingInteraction {
         self.output_now()
     }
 
+    fn take_view(&mut self) -> Option<ViewRequest> {
+        self.view.take()
+    }
+
     fn closing(&mut self, cx: &InteractionContext<'_>) {
         if let Ok(document) = cx.document() {
             self.closing_on(document);
         }
     }
+}
+
+/// The typed name of the command `id` (`LINE`), or the identifier when it has none.
+fn typed_name(id: &str) -> String {
+    draftbuilder_commands::vocabulary::NAMES
+        .iter()
+        .find(|name| name.id == id)
+        .and_then(|name| name.typed)
+        .map_or_else(|| id.to_owned(), str::to_owned)
 }
 
 /// The marker of a snap kind; kinds without a marker in the UI kit are not drawn.
@@ -775,7 +920,7 @@ mod tests {
         assert!(segments(&document).is_empty());
         let last = out.history.last().unwrap();
         assert!(last.starts_with("Cancelled"), "{last}");
-        assert!(last.contains("draftbuilder.draw.line"), "{last}");
+        assert!(last.contains("LINE"), "{last}");
     }
 
     #[test]

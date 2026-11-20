@@ -195,6 +195,9 @@ pub enum LineRole {
     Redo,
     /// Objects restored by OOPS; the text is their number.
     Restored,
+    /// A pick of a repeating command (trim, extend, offset) that changed nothing; the text is the
+    /// command's identifier.
+    Failed,
 }
 
 /// One line of the command history.
@@ -283,6 +286,8 @@ pub enum DynamicMode {
     Relative,
     /// X and Y of the point (drawing units).
     Absolute,
+    /// The width and height of the rectangle between the first corner and the cursor (drawing units).
+    Size,
 }
 
 /// One dynamic input field.
@@ -343,6 +348,12 @@ pub struct Outputs {
     pub snap: Option<SnapOut>,
     /// The tracking paths of the cursor.
     pub tracking: Vec<TrackOut>,
+    /// The points the active command has accepted so far, in meters, in the order given: the
+    /// window draws them as the path made so far.
+    pub placed: Vec<[f64; 2]>,
+    /// Every point the active command has accepted, in meters, in the order given (a window draws
+    /// the shape a rectangle, circle or arc is taking from them).
+    pub taken: Vec<[f64; 2]>,
     /// The dynamic input, while a point prompt waits.
     pub dynamic: Option<DynamicOut>,
     /// The selection set, in order.
@@ -355,8 +366,28 @@ pub struct Outputs {
     pub modifier: Option<ModifierOut>,
     /// The errors of this event.
     pub errors: Vec<ErrorOut>,
+    /// A change of the view this event asked for; the window applies it once.
+    pub view: Option<ViewOut>,
     /// The input line a recall event put on the command line; `None` when the event recalled nothing.
     pub recalled: Option<String>,
+}
+
+/// A change of the view the window applies: the result of a ZOOM. Corners are in drawing units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewOut {
+    /// Frame the whole drawing.
+    Extents,
+    /// Return to the view before the last zoom.
+    Previous,
+    /// Frame the rectangle between two corners.
+    Window {
+        /// One corner.
+        a: [f64; 2],
+        /// The opposite corner.
+        b: [f64; 2],
+    },
+    /// Scale the view about its center.
+    Scale(f64),
 }
 
 /// A point modifier that waits for a point (DB-SNAP-010).

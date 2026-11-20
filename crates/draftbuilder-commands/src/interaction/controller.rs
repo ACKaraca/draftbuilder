@@ -22,7 +22,7 @@ use super::lookup::{self, CommandEntry, Help, Suggestion};
 use super::resolution::{Resolved, Resolver};
 use super::{
     BandMode, BandOut, CursorOut, ErrorOut, Event, Expect, HistoryLine, LineRole, MAX_HISTORY,
-    ModifierOut, ObjectPicker, OptionOut, Outputs, PromptOut, SnapOut,
+    ModifierOut, ObjectPicker, OptionOut, Outputs, PromptOut, SnapOut, ViewOut,
 };
 use crate::draw::create::from_meters;
 use crate::draw::create::meters_per_unit;
@@ -43,6 +43,10 @@ struct Wants {
     point: bool,
     pick: bool,
     selection: bool,
+    /// A distance: a click answers with its distance from the command's last point.
+    distance: bool,
+    /// An angle: a click answers with the direction from the command's last point.
+    angle: bool,
 }
 
 impl Wants {
@@ -53,6 +57,8 @@ impl Wants {
                 Accept::Point { .. } => wants.point = true,
                 Accept::Pick { .. } => wants.pick = true,
                 Accept::Selection { .. } => wants.selection = true,
+                Accept::Distance { .. } => wants.distance = true,
+                Accept::Angle { .. } => wants.angle = true,
                 _ => {}
             }
         }
@@ -84,11 +90,36 @@ pub struct Controller {
     acquire: Acquire,
     /// The objects a selection prompt gathers and the shape of its next gesture.
     gather: Gather,
+    /// The folders of the paths the user typed, granted to the session.
+    granted: Vec<std::path::PathBuf>,
     /// The identifier of the command the last step ran on, for the history line of one that failed.
     running: Option<String>,
     seed: u64,
     /// The undo groups this controller opened and has not closed.
     open_groups: usize,
+    /// The repeating command (TRIM, EXTEND, OFFSET) that starts again after each run.
+    repeat: Option<Repeat>,
+    /// Where the last click picked an object (meters): the pick point of a trim or an extend.
+    click_point: Option<[f64; 2]>,
+}
+
+const TRIM: &str = "draftbuilder.modify.trim";
+const EXTEND: &str = "draftbuilder.modify.extend";
+const OFFSET: &str = "draftbuilder.modify.offset";
+
+/// A command that asks again after each run, until Enter or Escape: each pick of a trim or an
+/// extend changes its object at once, and an offset asks for the next object.
+#[derive(Debug, Clone, Default)]
+struct Repeat {
+    /// The cutting or boundary edges a trim or an extend keeps.
+    edges: Vec<ObjectId>,
+    /// The answers the controller gave itself when it started the command again; a cancel that
+    /// has no further answer is the user ending the repetition and is not a cancelled command.
+    auto: usize,
+}
+
+fn repeating(command: &str) -> bool {
+    matches!(command, TRIM | EXTEND | OFFSET)
 }
 
 impl Controller {
@@ -113,10 +144,29 @@ impl Controller {
             recalled: None,
             acquire: Acquire::Idle,
             gather: Gather::default(),
+            granted: Vec::new(),
             running: None,
             seed: 1,
             open_groups: 0,
+            repeat: None,
+            click_point: None,
         })
+    }
+
+    /// Hands the controller the status bar toggles the window switched: they shadow the drawing's
+    /// values of grid, snap, ortho, polar and running object snap while the document is open.
+    pub fn set_toggles(&mut self, toggles: &[(&str, Option<bool>)]) {
+        for (name, state) in toggles {
+            let key = crate::view::override_key(name);
+            match state {
+                Some(on) => {
+                    let _ = self.session.set_setting(&key, serde_json::Value::Bool(*on));
+                }
+                None => {
+                    self.session.remove_setting(&key);
+                }
+            }
+        }
     }
 
     /// The number of snap indexes built so far (the revision of the document is the only reason
@@ -130,6 +180,16 @@ impl Controller {
     #[must_use]
     pub fn active_prompt(&self) -> Option<&arc_command::prompt::Prompt> {
         self.line.active().and_then(|s| s.prompt())
+    }
+
+    /// The typed name of the active command (`LINE`), when a command waits and has one.
+    #[must_use]
+    pub fn active_command(&self) -> Option<&'static str> {
+        let id = self.line.active()?.command().id();
+        crate::vocabulary::NAMES
+            .iter()
+            .find(|name| name.id == id)
+            .and_then(|name| name.typed)
     }
 
     /// The answers the active command has collected so far (zero without a command).
@@ -246,8 +306,38 @@ impl Controller {
         step(&mut self.line, &target)
     }
 
+    /// The folders of the paths a typed line names become the session's read and write roots: a
+    /// person who types a path means that location, so the window's session may use it. The
+    /// automation and CLI root rules are not touched; they never go through here.
+    fn grant_typed_paths(&mut self, text: &str) {
+        let mut changed = false;
+        for token in text.split_whitespace() {
+            let path = std::path::Path::new(token.trim_matches(['"', '\'']));
+            let looks_like_path =
+                path.extension().is_some() || token.contains('/') || token.contains('\\');
+            if !looks_like_path {
+                continue;
+            }
+            let dir = match path.parent() {
+                Some(p) if p.as_os_str().is_empty() => std::path::PathBuf::from("."),
+                Some(p) => p.to_path_buf(),
+                None => continue,
+            };
+            if dir.is_dir() && !self.granted.contains(&dir) {
+                self.granted.push(dir);
+                changed = true;
+            }
+        }
+        if changed
+            && let Ok(roots) = arc_command::Roots::new(self.granted.clone(), self.granted.clone())
+        {
+            self.session.roots = roots;
+        }
+    }
+
     fn submit(&mut self, document: &Document, text: &str, errors: &mut Vec<ErrorOut>) {
         self.recall = None;
+        self.grant_typed_paths(text);
         if text.trim().is_empty() {
             self.empty_line(document, errors);
             return;
@@ -304,6 +394,20 @@ impl Controller {
                 )));
                 return;
             }
+            let at_target = self
+                .line
+                .active()
+                .and_then(|s| s.prompt())
+                .is_some_and(|p| p.key == "target");
+            let at_offset_object = self.gather.ids.is_empty()
+                && self.line.active().is_some_and(|s| {
+                    s.command().id() == OFFSET && s.prompt().is_some_and(|p| p.key == "objects")
+                });
+            if (self.repeat.is_some() && at_target) || at_offset_object {
+                // Enter ends a trim or an extend that waits for its next object.
+                self.cancel_command();
+                return;
+            }
             if let Shape::Polygon { region, points } = &self.gather.shape {
                 let (region, points) = (*region, points.clone());
                 self.close_polygon(document, region, &points, errors);
@@ -311,7 +415,21 @@ impl Controller {
             }
             if self.gather.multiple {
                 let ids = self.gather.ids.clone();
-                self.answer(document, PromptInput::Selection(ids), errors);
+                let has_default = self
+                    .line
+                    .active()
+                    .and_then(|s| s.prompt())
+                    .is_some_and(|p| p.default.is_some());
+                if ids.is_empty() && has_default {
+                    let result = self.with_line(document, |line, target| line.submit(target, ""));
+                    self.settle(document, result, errors);
+                } else if ids.is_empty() {
+                    // Nothing gathered and no default: the command ends, as at any prompt that
+                    // cannot go on without objects.
+                    self.cancel_command();
+                } else {
+                    self.answer(document, PromptInput::Selection(ids), errors);
+                }
                 return;
             }
             let result = self.with_line(document, |line, target| line.submit(target, ""));
@@ -333,10 +451,44 @@ impl Controller {
         let snapshot = document.snapshot();
         self.session.units = crate::script::session_units(&snapshot);
         let base = self.point_base();
-        let composed = self
-            .fields
-            .compose(&snapshot, &self.session, base, resolved.point);
+        let composed = self.fields.compose(
+            &snapshot,
+            &self.session,
+            base,
+            resolved.point,
+            self.rectangle_corner(),
+        );
         push_result(errors, composed)
+    }
+
+    /// Whether the active command waits for the second corner of a rectangle: its dynamic fields
+    /// are the two sizes.
+    fn rectangle_corner(&self) -> bool {
+        self.line.active().is_some_and(|s| {
+            s.command().id() == "draftbuilder.draw.rectangle"
+                && s.answers().len() == 1
+                && matches!(
+                    s.answers().first().map(|a| &a.input),
+                    Some(PromptInput::Point(_))
+                )
+        })
+    }
+
+    /// Where the rubber line starts: the base of a waiting modifier, else the last point answer of
+    /// the active command; none for a command that has taken no point yet.
+    fn band_base(&self) -> Option<[f64; 2]> {
+        if self.acquire.pending() {
+            return self.acquire.base();
+        }
+        self.line
+            .active()?
+            .answers()
+            .iter()
+            .rev()
+            .find_map(|a| match &a.input {
+                PromptInput::Point(p) => Some([p.x, p.y]),
+                _ => None,
+            })
     }
 
     /// The base point of the point prompt: the base of a `FROM` offset while it waits, else the
@@ -465,11 +617,16 @@ impl Controller {
     ) {
         match push_result(errors, result) {
             Some(Submitted::Ran(outcome)) => {
+                let command = outcome.command;
                 self.history.push(HistoryLine {
                     role: LineRole::Command,
-                    text: outcome.command,
+                    text: command.clone(),
                 });
                 self.command_ended();
+                if command == OFFSET && self.repeat.is_none() {
+                    self.repeat = Some(Repeat::default());
+                }
+                self.restart(document, &command, errors);
             }
             Some(Submitted::Cancelled) => self.command_ended(),
             Some(Submitted::Rejected { error, .. }) => {
@@ -480,18 +637,35 @@ impl Controller {
                 self.fields.clear();
                 self.drop_modifier();
                 self.gather = Gather::default();
+                // A prompt for a set of objects gathers picks, windows and crossings until
+                // Enter; a prompt for one object (`Pick`) takes its one pick.
+                if self.selection_prompt() {
+                    self.gather.set_multiple(true, None);
+                }
                 self.preselect(document, errors);
+                self.repeat_step(document, errors);
             }
             None => {
                 // A run that failed retired the command in the foundation: its state goes too.
                 if self.line.active().is_none() {
-                    if let Some(name) = self.running.take() {
-                        self.history.push(HistoryLine {
+                    let name = self.running.take();
+                    self.command_ended();
+                    match name {
+                        Some(name) if self.repeat.is_some() && repeating(&name) => {
+                            // The pick changed nothing: say so and ask again.
+                            errors.pop();
+                            self.history.push(HistoryLine {
+                                role: LineRole::Failed,
+                                text: name.clone(),
+                            });
+                            self.restart(document, &name, errors);
+                        }
+                        Some(name) => self.history.push(HistoryLine {
                             role: LineRole::Cancelled,
                             text: name,
-                        });
+                        }),
+                        None => {}
                     }
-                    self.command_ended();
                 }
             }
         }
@@ -539,6 +713,96 @@ impl Controller {
         })
     }
 
+    /// Starts the repeating command again and answers its first prompts itself: a trim or an extend
+    /// with the same edges, an offset with the remembered distance. When that does not reach the
+    /// prompt for the next object (an offset with no remembered distance), the repetition ends.
+    fn restart(&mut self, document: &Document, command: &str, errors: &mut Vec<ErrorOut>) {
+        let Some(edges) = self.repeat.as_ref().map(|r| r.edges.clone()) else {
+            return;
+        };
+        if !repeating(command) {
+            self.repeat = None;
+            return;
+        }
+        let started = self.with_line(document, |line, target| {
+            line.start(target, command, Map::new())
+        });
+        let fed = match started {
+            Ok(Submitted::Prompt(_)) if command == OFFSET => {
+                self.with_line(document, |line, target| line.submit(target, ""))
+            }
+            Ok(Submitted::Prompt(_)) => self.with_line(document, |line, target| {
+                line.answer(target, PromptInput::Selection(edges))
+            }),
+            other => other,
+        };
+        let waiting = |this: &Self, key: &str| {
+            this.line
+                .active()
+                .and_then(|s| s.prompt())
+                .is_some_and(|p| p.key == key)
+        };
+        let key = if command == OFFSET {
+            "objects"
+        } else {
+            "target"
+        };
+        let ready = matches!(fed, Ok(Submitted::Prompt(_))) && waiting(self, key);
+        if ready {
+            let auto = self.line.active().map_or(0, |s| s.answers().len());
+            if let Some(repeat) = self.repeat.as_mut() {
+                repeat.auto = auto;
+            }
+            self.settle(document, fed, errors);
+        } else {
+            // It could not ask again: leave without a trace in the history.
+            self.repeat = None;
+            if self.line.active().is_some() {
+                self.line.cancel();
+            }
+            self.command_ended();
+        }
+    }
+
+    /// The steps of a trim or an extend that a click answers on its own: the pick point follows
+    /// the object, and the command runs after each pick. The first time the edges are done, the
+    /// command starts to repeat.
+    fn repeat_step(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
+        let Some(session) = self.line.active() else {
+            return;
+        };
+        let id = session.command().id();
+        if id != TRIM && id != EXTEND {
+            return;
+        }
+        let Some(key) = session.prompt().map(|p| p.key.clone()) else {
+            return;
+        };
+        let picked = session.answers().iter().any(|a| a.key == "pick");
+        if key == "target" && !picked && self.repeat.is_none() {
+            let edges = session
+                .answers()
+                .iter()
+                .find_map(|a| match (a.key.as_str(), &a.input) {
+                    ("edges", PromptInput::Selection(ids)) => Some(ids.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let auto = session.answers().len();
+            self.repeat = Some(Repeat { edges, auto });
+        }
+        if self.repeat.is_none() {
+            return;
+        }
+        match (key.as_str(), self.click_point.take()) {
+            ("pick", Some(at)) => self.answer(document, PromptInput::Point(point_of(at)), errors),
+            ("target", _) if picked => {
+                self.answer(document, PromptInput::Keyword("end".to_owned()), errors);
+            }
+            _ => {}
+        }
+    }
+
     /// The state the command's end resets: the locks, the acquired points and the cursor's snap,
     /// which the document may have moved away from.
     fn command_ended(&mut self) {
@@ -547,6 +811,27 @@ impl Controller {
         self.acquire = Acquire::Idle;
         self.cursor = None;
         self.gather = Gather::default();
+    }
+
+    /// Cancels the active command and everything it holds.
+    fn cancel_command(&mut self) {
+        let quiet = self.repeat.as_ref().is_some_and(|r| {
+            self.line
+                .active()
+                .is_some_and(|s| s.answers().len() <= r.auto)
+        });
+        self.repeat = None;
+        if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
+            let cancelled = self.line.cancel();
+            if matches!(cancelled, Submitted::Cancelled) && !quiet {
+                self.history.push(HistoryLine {
+                    role: LineRole::Cancelled,
+                    text: name,
+                });
+            }
+        }
+        self.window = None;
+        self.command_ended();
     }
 
     fn escape(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
@@ -561,20 +846,13 @@ impl Controller {
         if self.window.take().is_some() {
             return;
         }
-        if self.gather.pending() {
-            // A selection prompt drops its gesture and its gathered objects, and keeps waiting.
-            self.gather = Gather::default();
+        if self.line.active().is_some() {
+            // One Escape ends the whole command, with its gathered objects and gestures.
+            self.cancel_command();
             return;
         }
-        if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
-            let cancelled = self.line.cancel();
-            if matches!(cancelled, Submitted::Cancelled) {
-                self.history.push(HistoryLine {
-                    role: LineRole::Cancelled,
-                    text: name,
-                });
-            }
-            self.command_ended();
+        if self.gather.pending() {
+            self.gather = Gather::default();
             return;
         }
         let snapshot = document.snapshot();
@@ -624,6 +902,7 @@ impl Controller {
 
     /// Cancels the waiting command, if any, and records the cancellation in the history.
     fn cancel_waiting(&mut self) {
+        self.repeat = None;
         if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
             let cancelled = self.line.cancel();
             if matches!(cancelled, Submitted::Cancelled) {
@@ -840,6 +1119,7 @@ impl Controller {
         };
         match (prompt_wants, object) {
             (Some(wants), Some(id)) if wants.pick => {
+                self.click_point = Some(at);
                 self.answer(document, PromptInput::Pick(id), errors);
             }
             (Some(wants), Some(id)) if wants.selection => {
@@ -858,6 +1138,19 @@ impl Controller {
                 self.answer(document, PromptInput::Point(point_of(point)), errors);
             }
             (Some(wants), None) if wants.selection => self.start_window(at),
+            (Some(wants), _) if wants.distance || wants.angle => {
+                // A click measures from the command's last point (a circle's center for its
+                // radius): the distance or the direction to the resolved cursor.
+                if let Some(base) = self.point_base() {
+                    let (dx, dy) = (resolved.point[0] - base[0], resolved.point[1] - base[1]);
+                    let input = if wants.distance {
+                        PromptInput::Distance(dx.hypot(dy))
+                    } else {
+                        PromptInput::Angle(dy.atan2(dx))
+                    };
+                    self.answer(document, input, errors);
+                }
+            }
             (Some(_), _) => {}
             (None, Some(id)) => self.gesture(document, vec![id], self.gather.mode, errors),
             (None, None) => self.start_window(at),
@@ -1301,7 +1594,7 @@ impl Controller {
 
     /// The selection the window shows: the gathered objects in multiple mode, else the session's.
     fn shown_selection(&self, snapshot: &Snapshot) -> Vec<ObjectId> {
-        if self.gather.multiple {
+        if self.gather.multiple && !self.gather.ids.is_empty() {
             self.gather
                 .ids
                 .iter()
@@ -1313,17 +1606,52 @@ impl Controller {
         }
     }
 
+    /// The view change a ZOOM asked for, taken from the session once.
+    fn take_view(&mut self) -> Option<ViewOut> {
+        let request = self.session.remove_setting(crate::view::REQUEST)?;
+        let corners = |v: &serde_json::Value| -> Option<([f64; 2], [f64; 2])> {
+            serde_json::from_value::<[[f64; 2]; 2]>(v.get("corners")?.clone())
+                .ok()
+                .map(|c| (c[0], c[1]))
+        };
+        match request.get("mode")?.as_str()? {
+            "extents" => Some(ViewOut::Extents),
+            "previous" => Some(ViewOut::Previous),
+            "window" => corners(&request).map(|(a, b)| ViewOut::Window { a, b }),
+            "scale" => request.get("factor")?.as_f64().map(ViewOut::Scale),
+            _ => None,
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one assembly of everything a window shows"
+    )]
     fn outputs(&mut self, document: &Document, errors: Vec<ErrorOut>) -> Outputs {
         let excess = self.history.len().saturating_sub(self.history_limit());
         self.history.drain(..excess);
         let snapshot = document.snapshot();
         self.session.units = crate::script::session_units(&snapshot);
+        let view = self.take_view();
         let prompt = self.prompt_out();
+        // A prompt for a distance or an angle is answered by a click too, so it draws the rubber
+        // line from the last point like a point prompt does.
+        let measures = self
+            .line
+            .active()
+            .and_then(|s| s.prompt())
+            .map(|p| Wants::of(&p.accepts))
+            .is_some_and(|w| w.distance || w.angle)
+            // The factor of a scale is read off the line from the base point too.
+            || self.line.active().is_some_and(|s| s.command().id() == "draftbuilder.modify.scale");
         let expects_point = prompt
             .as_ref()
             .is_some_and(|p| p.expects.contains(&Expect::Point));
         let cursor = self.cursor.as_ref().map(|(r, _)| r);
         let base = self.point_base();
+        // The rubber line starts at a point this command took, never at the last point of an
+        // earlier command.
+        let band_base = self.band_base();
         let band = match (self.window, self.cursor.as_ref()) {
             (Some(start), Some((_, at))) => Some(BandOut {
                 base: start,
@@ -1333,21 +1661,30 @@ impl Controller {
                     _ => band::mode(start, *at),
                 },
             }),
-            (None, Some((r, _))) if expects_point && base.is_some() => Some(BandOut {
-                base: base.unwrap_or_default(),
-                current: r.point,
-                mode: BandMode::Rubber,
-            }),
+            (None, Some((r, _))) if (expects_point || measures) && band_base.is_some() => {
+                Some(BandOut {
+                    base: band_base.unwrap_or_default(),
+                    current: r.point,
+                    mode: BandMode::Rubber,
+                })
+            }
             _ => None,
         };
         let dynamic = match (&cursor, expects_point) {
-            (Some(r), true) => Some(self.fields.output(&snapshot, &self.session, base, r.point)),
+            (Some(r), true) => Some(self.fields.output(
+                &snapshot,
+                &self.session,
+                base,
+                r.point,
+                self.rectangle_corner(),
+            )),
             _ => None,
         };
         Outputs {
             prompt,
             history: self.history.clone(),
             recalled: self.recalled.take(),
+            view,
             band,
             snap: cursor.and_then(|r| {
                 r.snap.map(|kind| SnapOut {
@@ -1356,6 +1693,50 @@ impl Controller {
                 })
             }),
             tracking: cursor.map(|r| r.tracking.clone()).unwrap_or_default(),
+            placed: self
+                .line
+                .active()
+                .filter(|session| {
+                    // Only commands whose points are the vertices of what they build show the
+                    // path so far.
+                    matches!(
+                        session.command().id(),
+                        "draftbuilder.draw.line" | "draftbuilder.draw.polyline"
+                    )
+                })
+                .map(|session| {
+                    session
+                        .answers()
+                        .iter()
+                        .filter_map(|answer| match &answer.input {
+                            PromptInput::Point(p) => Some([p.x, p.y]),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            // With a keyword among the answers the points mean something else (a circle by its
+            // diameter, an arc by its center): the window draws no shape from them.
+            taken: self
+                .line
+                .active()
+                .filter(|session| {
+                    !session
+                        .answers()
+                        .iter()
+                        .any(|a| matches!(a.input, PromptInput::Keyword(_)))
+                })
+                .map(|session| {
+                    session
+                        .answers()
+                        .iter()
+                        .filter_map(|answer| match &answer.input {
+                            PromptInput::Point(p) => Some([p.x, p.y]),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             dynamic,
             selection: self.shown_selection(&snapshot),
             open_groups: self.open_groups,

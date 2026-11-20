@@ -42,6 +42,7 @@ pub mod script;
 pub mod select;
 pub mod settings;
 pub mod undo;
+pub mod view;
 pub mod vocabulary;
 
 use std::path::Path;
@@ -90,6 +91,7 @@ pub fn registry() -> Result<Registry> {
     property::register(&mut registry)?;
     settings::register(&mut registry)?;
     precision::register(&mut registry)?;
+    view::register(&mut registry)?;
     vocabulary::register_names(&mut registry, vocabulary::Area::Drawing)?;
     names::install(&mut registry)?;
     Ok(registry)
