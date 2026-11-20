@@ -251,6 +251,60 @@ pub(crate) fn bulge_direction(start: Point2, tangent: Vector2, end: Point2) -> R
     Ok(bulge_of_sweep(sweep))
 }
 
+/// The arc that leaves `start` along `tangent` and ends at `end`: the circle through both points
+/// that is tangent to the direction at `start`. Its sweep is more than a half turn when `end` lies
+/// behind `start`.
+///
+/// # Errors
+///
+/// `db.cmd.points_collinear` for coincident points; `db.cmd.no_solution` when `end` lies on the
+/// tangent line (no arc) or the tangent is zero.
+pub(crate) fn arc_tangent_end(start: Point2, tangent: Vector2, end: Point2) -> Result<Arc2> {
+    distinct(start, end)?;
+    if tangent.norm() <= 0.0 || !tangent.norm().is_finite() {
+        return Err(Error::new(codes::NO_SOLUTION));
+    }
+    let t = tangent.normalize();
+    let d = end - start;
+    let n = perp(t);
+    let normal = n.dot(&d);
+    if normal.abs() <= linear() {
+        return Err(Error::new(codes::NO_SOLUTION));
+    }
+    let radius = d.norm_squared() / (2.0 * normal);
+    let center = start + n * radius;
+    let counterclockwise = t.dot(&perp(start - center)) > 0.0;
+    let (ts, te) = (angle_of(start - center), angle_of(end - center));
+    let sweep = if counterclockwise {
+        ccw_between(ts, te)
+    } else {
+        -ccw_between(te, ts)
+    };
+    Arc2::new(center, radius.abs(), ts, sweep)
+}
+
+/// The arc from `start` about `center` spanning the chord length `chord`: counterclockwise for a
+/// positive chord, clockwise for a negative one. A chord equal to the diameter is a half turn.
+///
+/// # Errors
+///
+/// `db.cmd.no_solution` when the chord is zero or longer than the diameter, or `start` is the
+/// center.
+pub(crate) fn arc_center_chord(start: Point2, center: Point2, chord: f64) -> Result<Arc2> {
+    let radius = (start - center).norm();
+    if radius.is_nan() || radius <= linear() || chord.abs() <= linear() || !chord.is_finite() {
+        return Err(Error::new(codes::NO_SOLUTION));
+    }
+    // A chord at the diameter may exceed it by rounding; anything beyond that is refused.
+    let half = chord.abs() / (2.0 * radius);
+    if half > 1.0 + 1e-12 {
+        return Err(Error::new(codes::NO_SOLUTION));
+    }
+    let half = half.min(1.0);
+    let angle = 2.0 * half.asin() * chord.signum();
+    arc_center_angle(start, center, angle)
+}
+
 /// The direction of travel at the end of a segment from `start` to `end` with `bulge`, as a
 /// unit vector.
 #[must_use]

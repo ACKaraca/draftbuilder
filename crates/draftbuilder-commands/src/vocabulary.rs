@@ -273,6 +273,24 @@ pub const NAMES: &[Name] = &[
         aliases: &[],
     },
     Name {
+        id: "draftbuilder.draw.divide",
+        area: Area::Draw,
+        typed: Some("DIVIDE"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.draw.measure",
+        area: Area::Draw,
+        typed: Some("MEASURE"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.draw.wipeout",
+        area: Area::Draw,
+        typed: Some("WIPEOUT"),
+        aliases: &[],
+    },
+    Name {
         id: "draftbuilder.select.filter",
         area: Area::Select,
         typed: Some("FILTER"),

@@ -1,14 +1,16 @@
 //! ARC (`draftbuilder.draw.arc`, typed `ARC`): a circular arc by three points; by start, center
 //! and end (counterclockwise from start); by start, center and included angle; by start, end and
 //! radius (the minor arc, counterclockwise for a positive radius); or by start, end and included
-//! angle (positive counterclockwise). The continuation from the last line or arc, and the
-//! start, center and chord-length form, are not built.
+//! angle (positive counterclockwise); by start, center and chord length; or tangent to the last
+//! line or arc of the model space, continuing from its end to an end point (`continue` in the prompt
+//! form).
 
 use arc_base::math::Point2;
 use arc_base::{Error, Result};
 use arc_command::{
     Accept, CommandSpec, Context, PointDims, Prompt, PromptInput, PromptState, Step,
 };
+use arc_doc::Snapshot;
 use arc_geom::{Arc2, Curve2};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -18,8 +20,10 @@ use super::create::{
     keyword_of, machine, option, point_of,
 };
 use super::geometry::{
-    arc_center_angle, arc_center_end, arc_start_end_angle, arc_start_end_radius, arc_through,
+    arc_center_angle, arc_center_chord, arc_center_end, arc_start_end_angle, arc_start_end_radius,
+    arc_tangent_end, arc_through,
 };
+use super::line::last_continuation;
 use crate::error::{Message, codes};
 
 /// How an arc is placed.
@@ -71,6 +75,21 @@ pub enum ArcShape {
         /// The included angle in radians, not a full turn.
         angle: f64,
     },
+    /// Start, center and chord length: counterclockwise for a positive chord, clockwise for a
+    /// negative one, at most the diameter in magnitude.
+    StartCenterChord {
+        /// The start point, in drawing units.
+        start: [f64; 2],
+        /// The center, in drawing units.
+        center: [f64; 2],
+        /// The signed chord length in drawing units.
+        chord: f64,
+    },
+    /// Tangent to the last line or arc of the model space at its end, through `end`.
+    Continue {
+        /// The end point, in drawing units.
+        end: [f64; 2],
+    },
 }
 
 /// Parameters of `draftbuilder.draw.arc`.
@@ -105,6 +124,21 @@ const VALUE_ANGLE: Message = Message {
 const VALUE_RADIUS: Message = Message {
     message_id: "db-cmd-draw-arc-value-radius",
 };
+const START_CONTINUE: Message = Message {
+    message_id: "db-cmd-draw-arc-start-continue",
+};
+const CONTINUE_END: Message = Message {
+    message_id: "db-cmd-draw-arc-continue-end",
+};
+const OPTION_CONTINUE: Message = Message {
+    message_id: "db-cmd-draw-arc-option-continue",
+};
+const OPTION_CHORD: Message = Message {
+    message_id: "db-cmd-draw-arc-option-chord",
+};
+const VALUE_CHORD: Message = Message {
+    message_id: "db-cmd-draw-arc-value-chord",
+};
 
 fn ask(key: &str, message: Message, accept: Accept) -> Result<Step> {
     Ok(Step::Ask(Prompt::new(key, message.message_id, accept)))
@@ -138,8 +172,22 @@ fn distance(state: &PromptState<'_>, key: &str) -> Option<f64> {
 }
 
 fn next(state: &PromptState<'_>) -> Result<Step> {
+    if let Some(PromptInput::Keyword(id)) = state.answer("start")
+        && id.as_str() == "continue"
+    {
+        return continue_next(state);
+    }
     let Some(start) = point(state, "start") else {
-        return ask("start", START, point_accept());
+        return match last_continuation(state.snapshot)? {
+            Some(_) => {
+                let cont = option("continue", OPTION_CONTINUE, None);
+                Ok(Step::Ask(
+                    Prompt::new("start", START_CONTINUE.message_id, point_accept())
+                        .or(Accept::keywords([cont])),
+                ))
+            }
+            None => ask("start", START, point_accept()),
+        };
     };
     let Some(method) = state.answer("method") else {
         let second = option("second", OPTION_SECOND, Some('s'));
@@ -173,6 +221,13 @@ fn next(state: &PromptState<'_>) -> Result<Step> {
     }
 }
 
+fn continue_next(state: &PromptState<'_>) -> Result<Step> {
+    let Some(end) = point(state, "end") else {
+        return ask("end", CONTINUE_END, point_accept());
+    };
+    done(serde_json::json!({"shape": {"method": "continue", "end": end}}))
+}
+
 fn second_next(state: &PromptState<'_>, start: [f64; 2]) -> Result<Step> {
     let Some(second) = point(state, "second") else {
         return ask("second", POINT, point_accept());
@@ -192,11 +247,19 @@ fn center_next(state: &PromptState<'_>, start: [f64; 2]) -> Result<Step> {
     match state.answer("end") {
         None => {
             let angle_option = option("angle", OPTION_ANGLE, Some('a'));
+            let chord_option = option("length", OPTION_CHORD, Some('l'));
             Ok(Step::Ask(
                 Prompt::new("end", END.message_id, point_accept())
-                    .or(Accept::keywords([angle_option])),
+                    .or(Accept::keywords([angle_option, chord_option])),
             ))
         }
+        Some(PromptInput::Keyword(id)) if id.as_str() == "length" => match distance(state, "chord")
+        {
+            None => ask("chord", VALUE_CHORD, Accept::distance()),
+            Some(chord) => done(serde_json::json!({
+                "shape": {"method": "start_center_chord", "start": start, "center": center, "chord": chord}
+            })),
+        },
         Some(PromptInput::Keyword(_)) => match angle(state, "value") {
             None => ask("value", VALUE_ANGLE, Accept::angle()),
             Some(value) => done(serde_json::json!({
@@ -226,9 +289,19 @@ fn check(state: &PromptState<'_>, _: &Prompt, input: &PromptInput) -> Result<()>
     Ok(())
 }
 
-fn arc(shape: ArcShape) -> Result<Arc2> {
+fn arc(snapshot: &Snapshot, shape: ArcShape) -> Result<Arc2> {
     let p = |[x, y]: [f64; 2]| Point2::new(x, y);
     match shape {
+        ArcShape::Continue { end } => {
+            let (start, tangent) = last_continuation(snapshot)?
+                .ok_or_else(|| Error::new(codes::VALUE_INVALID).with_detail("field", "shape"))?;
+            arc_tangent_end(start, tangent, p(end))
+        }
+        ArcShape::StartCenterChord {
+            start,
+            center,
+            chord,
+        } => arc_center_chord(p(start), p(center), chord),
         ArcShape::ThreePoints { start, second, end } => arc_through(p(start), p(second), p(end)),
         ArcShape::StartCenterEnd { start, center, end } => {
             arc_center_end(p(start), p(center), p(end))
@@ -248,7 +321,7 @@ fn arc(shape: ArcShape) -> Result<Arc2> {
 }
 
 fn run(ctx: &mut Context<'_>, p: ArcParams) -> Result<Created> {
-    let found = arc(p.shape)?;
+    let found = arc(ctx.snapshot(), p.shape)?;
     let mut creator = Creator::new(ctx.snapshot())?;
     creator.curve(ctx, &Curve2::Arc(found))?;
     Ok(creator.finish(ctx))

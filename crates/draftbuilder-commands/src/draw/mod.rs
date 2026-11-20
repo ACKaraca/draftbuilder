@@ -6,7 +6,8 @@
 //! typed form, so one command is one undo step. Families: [`line`] (LINE), [`construction`]
 //! (XLINE, RAY), [`polyline`] (PLINE), [`rectangle`] (RECTANG), [`polygon`] (POLYGON), [`circle`]
 //! (CIRCLE), [`arc`] (ARC), [`ellipse`] (ELLIPSE), [`donut`] (DONUT), [`spline`] (SPLINE) and
-//! [`point`] (POINT). Shared support is in [`create`]; the pure constructions are in [`geometry`].
+//! [`point`] (POINT), [`divide`] (DIVIDE, MEASURE) and [`wipeout`] (WIPEOUT). Shared support is in
+//! [`create`]; the pure constructions are in [`geometry`].
 //!
 //! The rows of the capability document, with what each command supports, are in
 //! `docs/architecture/overview.md`.
@@ -15,6 +16,7 @@ mod arc;
 mod circle;
 mod construction;
 pub(crate) mod create;
+mod divide;
 mod donut;
 mod ellipse;
 pub(crate) mod geometry;
@@ -24,6 +26,7 @@ mod polygon;
 mod polyline;
 mod rectangle;
 mod spline;
+mod wipeout;
 
 use arc_base::Result;
 use arc_command::{CommandSpec, Context, Permission, Registry, UndoBehavior};
@@ -68,7 +71,9 @@ pub fn register(registry: &mut Registry) -> Result<()> {
         .chain(ellipse::specs())
         .chain(donut::specs())
         .chain(spline::specs())
-        .chain(point::specs());
+        .chain(point::specs())
+        .chain(divide::specs())
+        .chain(wipeout::specs());
     for spec in specs {
         registry.register(spec)?;
     }

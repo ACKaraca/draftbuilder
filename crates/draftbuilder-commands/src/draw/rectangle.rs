@@ -1,16 +1,19 @@
 //! RECTANG (`draftbuilder.draw.rectangle`, typed `RECTANG`): a closed polyline rectangle placed by
 //! two opposite corners, by a rotation and a corner, by its length and width, or by its area and
 //! length. The side point of the size forms picks the quadrant the rectangle extends into. The
-//! typed form takes a constant width of the outline and a fillet radius of the corners (the
-//! foundation's corner fillet, refused for a rectangle with a width). Chamfers, elevation and
-//! thickness are not built.
+//! options are a constant width of the outline, a fillet radius or a chamfer distance of the corners
+//! (the fillet and the chamfer are exclusive), an elevation and a thickness. The prompt form offers
+//! them as keywords on the first-corner prompt; each takes its value, then the prompt comes back.
 
 use arc_base::Result;
 use arc_base::math::Point2;
 use arc_base::{Dimension, Error, Tolerance};
 use arc_command::{
-    Accept, CommandSpec, Context, PointDims, Prompt, PromptInput, PromptState, Step,
+    Accept, CommandSpec, Context, KeywordOption, PointDims, Prompt, PromptInput, PromptState, Step,
 };
+use arc_doc::{GeometryBytes, Value};
+use arc_draft::types::{self, entity};
+use arc_geom::encoding::GeomCodec;
 use arc_geom::{Curve2, Polyline2, PolylineVertex, corner};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -77,6 +80,15 @@ pub struct RectangleParams {
     /// The fillet radius of the corners in drawing units, zero for square corners.
     #[serde(default)]
     pub fillet: f64,
+    /// The chamfer distance of the corners in drawing units, zero for none; exclusive with `fillet`.
+    #[serde(default)]
+    pub chamfer: f64,
+    /// The elevation of the rectangle in drawing units along its extrusion direction.
+    #[serde(default)]
+    pub elevation: f64,
+    /// The extrusion thickness of the rectangle in drawing units.
+    #[serde(default)]
+    pub thickness: f64,
 }
 
 const LABEL: Message = Message {
@@ -118,6 +130,45 @@ const OPTION_DIMENSIONS: Message = Message {
 const OPTION_AREA: Message = Message {
     message_id: "db-cmd-option-area",
 };
+const OPTION_FILLET: Message = Message {
+    message_id: "db-cmd-draw-rectangle-option-fillet",
+};
+const OPTION_CHAMFER: Message = Message {
+    message_id: "db-cmd-draw-rectangle-option-chamfer",
+};
+const OPTION_WIDTH_KEYWORD: Message = Message {
+    message_id: "db-cmd-draw-rectangle-option-width",
+};
+const OPTION_ELEVATION: Message = Message {
+    message_id: "db-cmd-draw-rectangle-option-elevation",
+};
+const OPTION_THICKNESS: Message = Message {
+    message_id: "db-cmd-draw-rectangle-option-thickness",
+};
+const VALUE_FILLET: Message = Message {
+    message_id: "db-cmd-draw-rectangle-value-fillet",
+};
+const VALUE_CHAMFER: Message = Message {
+    message_id: "db-cmd-draw-rectangle-value-chamfer",
+};
+const VALUE_WIDTH: Message = Message {
+    message_id: "db-cmd-draw-rectangle-value-width",
+};
+const VALUE_ELEVATION: Message = Message {
+    message_id: "db-cmd-draw-rectangle-value-elevation",
+};
+const VALUE_THICKNESS: Message = Message {
+    message_id: "db-cmd-draw-rectangle-value-thickness",
+};
+
+/// The options of the prompt form, by keyword: the keyword, its message and its value message.
+const VALUE_OPTIONS: [(&str, Message, Message); 5] = [
+    ("fillet", OPTION_FILLET, VALUE_FILLET),
+    ("chamfer", OPTION_CHAMFER, VALUE_CHAMFER),
+    ("width", OPTION_WIDTH_KEYWORD, VALUE_WIDTH),
+    ("elevation", OPTION_ELEVATION, VALUE_ELEVATION),
+    ("thickness", OPTION_THICKNESS, VALUE_THICKNESS),
+];
 
 fn ask(key: &str, message: Message, accept: Accept) -> Result<Step> {
     Ok(Step::Ask(Prompt::new(key, message.message_id, accept)))
@@ -166,8 +217,11 @@ fn area(state: &PromptState<'_>, key: &str) -> Option<f64> {
 }
 
 fn next(state: &PromptState<'_>) -> Result<Step> {
+    if let Some(step) = option_value_step(state) {
+        return Ok(step);
+    }
     let Some(first) = point(state, "first") else {
-        return ask("first", FIRST, point_accept());
+        return Ok(first_prompt());
     };
     match state.answer("other") {
         None => {
@@ -187,9 +241,10 @@ fn next(state: &PromptState<'_>) -> Result<Step> {
             "dimensions" => dimensions_next(state, first),
             _ => area_next(state, first),
         },
-        Some(_) => done(serde_json::json!({
-            "shape": {"mode": "corners", "first": first, "other": point(state, "other")}
-        })),
+        Some(_) => finish(
+            state,
+            serde_json::json!({"mode": "corners", "first": first, "other": point(state, "other")}),
+        ),
     }
 }
 
@@ -200,9 +255,10 @@ fn rotation_next(state: &PromptState<'_>, first: [f64; 2]) -> Result<Step> {
     let Some(other) = point(state, "rotated") else {
         return ask("rotated", ROTATED, point_accept());
     };
-    done(serde_json::json!({
-        "shape": {"mode": "rotation", "first": first, "angle": angle_value, "other": other}
-    }))
+    finish(
+        state,
+        serde_json::json!({"mode": "rotation", "first": first, "angle": angle_value, "other": other}),
+    )
 }
 
 fn dimensions_next(state: &PromptState<'_>, first: [f64; 2]) -> Result<Step> {
@@ -215,9 +271,10 @@ fn dimensions_next(state: &PromptState<'_>, first: [f64; 2]) -> Result<Step> {
     let Some(side) = point(state, "side") else {
         return ask("side", SIDE, point_accept());
     };
-    done(serde_json::json!({
-        "shape": {"mode": "dimensions", "first": first, "length": length, "width": width, "side": side}
-    }))
+    finish(
+        state,
+        serde_json::json!({"mode": "dimensions", "first": first, "length": length, "width": width, "side": side}),
+    )
 }
 
 fn area_next(state: &PromptState<'_>, first: [f64; 2]) -> Result<Step> {
@@ -230,14 +287,57 @@ fn area_next(state: &PromptState<'_>, first: [f64; 2]) -> Result<Step> {
     let Some(side) = point(state, "side") else {
         return ask("side", SIDE, point_accept());
     };
-    done(serde_json::json!({
-        "shape": {"mode": "area", "first": first, "area": total, "length": length, "side": side}
-    }))
+    finish(
+        state,
+        serde_json::json!({"mode": "area", "first": first, "area": total, "length": length, "side": side}),
+    )
 }
 
-fn check(state: &PromptState<'_>, _: &Prompt, input: &PromptInput) -> Result<()> {
+/// The value prompt of an option keyword answered on the first-corner prompt, while its value is
+/// not given after the keyword.
+fn option_value_step(state: &PromptState<'_>) -> Option<Step> {
+    let Some(PromptInput::Keyword(id)) = state.answer("first") else {
+        return None;
+    };
+    let (_, _, value) = VALUE_OPTIONS.iter().find(|(k, _, _)| *k == id.as_str())?;
+    let key = format!("value_{id}");
+    let position = |k: &str| state.answers.iter().rposition(|a| a.key == k);
+    let answered = matches!((position(&key), position("first")), (Some(v), Some(f)) if v > f);
+    (!answered).then(|| Step::Ask(Prompt::new(key, value.message_id, Accept::distance())))
+}
+
+/// The first-corner prompt: its option keywords, which set the outline options before the corners.
+fn first_prompt() -> Step {
+    let keywords: Vec<KeywordOption> = VALUE_OPTIONS
+        .iter()
+        .map(|(id, label, _)| {
+            option(
+                id,
+                Message {
+                    message_id: label.message_id,
+                },
+                None,
+            )
+        })
+        .collect();
+    Step::Ask(Prompt::new("first", FIRST.message_id, point_accept()).or(Accept::keywords(keywords)))
+}
+
+/// The complete parameters: the shape and the options given on the first-corner prompt.
+fn finish(state: &PromptState<'_>, shape: serde_json::Value) -> Result<Step> {
+    let mut params = serde_json::json!({"shape": shape});
+    for (keyword, _, _) in VALUE_OPTIONS {
+        if let Some(PromptInput::Distance(meters)) = state.answer(&format!("value_{keyword}")) {
+            params[keyword] = serde_json::json!(from_meters(state.snapshot, *meters));
+        }
+    }
+    done(params)
+}
+
+fn check(state: &PromptState<'_>, prompt: &Prompt, input: &PromptInput) -> Result<()> {
     if let PromptInput::Distance(meters) = input
         && *meters <= 0.0
+        && matches!(prompt.key.as_str(), "length" | "width")
         && state.answer("first").is_some()
     {
         return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "length"));
@@ -279,6 +379,18 @@ fn run(ctx: &mut Context<'_>, p: RectangleParams) -> Result<Created> {
     if !(p.width.is_finite() && p.width >= 0.0) {
         return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "width"));
     }
+    if !(p.fillet.is_finite() && p.fillet >= 0.0) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "fillet"));
+    }
+    if !(p.chamfer.is_finite() && p.chamfer >= 0.0) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "chamfer"));
+    }
+    if p.fillet > 0.0 && p.chamfer > 0.0 {
+        return Err(Error::new(codes::PARAMS_CONFLICT).with_detail("field", "chamfer"));
+    }
+    if !(p.elevation.is_finite() && p.thickness.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "elevation"));
+    }
     let outline = corners(p.shape)?;
     let vertices = outline
         .iter()
@@ -294,8 +406,24 @@ fn run(ctx: &mut Context<'_>, p: RectangleParams) -> Result<Created> {
         polyline =
             corner::fillet_polyline_vertices(&polyline, p.fillet, &Tolerance::DEFAULT)?.polyline;
     }
+    if p.chamfer > 0.0 {
+        let cut = corner::chamfer_polyline_vertices(&polyline, p.chamfer, &Tolerance::DEFAULT)?;
+        if !cut.skipped.is_empty() {
+            return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "chamfer"));
+        }
+        polyline = cut.polyline;
+    }
+    let geometry = Value::Geometry(GeometryBytes(Curve2::Polyline(polyline).encode()));
     let mut creator = Creator::new(ctx.snapshot())?;
-    creator.curve(ctx, &Curve2::Polyline(polyline))?;
+    creator.add(
+        ctx,
+        types::POLYLINE,
+        vec![
+            (entity::KIND, geometry),
+            (entity::ELEVATION, Value::F64(p.elevation)),
+            (entity::THICKNESS, Value::F64(p.thickness)),
+        ],
+    )?;
     Ok(creator.finish(ctx))
 }
 

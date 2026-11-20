@@ -96,6 +96,21 @@ const START_WIDTH: Message = Message {
 const END_WIDTH: Message = Message {
     message_id: "db-cmd-draw-polyline-end-width",
 };
+const START_HALF_WIDTH: Message = Message {
+    message_id: "db-cmd-draw-polyline-start-half-width",
+};
+const END_HALF_WIDTH: Message = Message {
+    message_id: "db-cmd-draw-polyline-end-half-width",
+};
+const LENGTH: Message = Message {
+    message_id: "db-cmd-draw-polyline-length",
+};
+const OPTION_HALFWIDTH: Message = Message {
+    message_id: "db-cmd-draw-polyline-option-halfwidth",
+};
+const OPTION_LENGTH: Message = Message {
+    message_id: "db-cmd-draw-polyline-option-length",
+};
 
 /// A vertex of the path being drawn.
 #[derive(Debug, Clone, Copy)]
@@ -126,14 +141,33 @@ enum Param {
     Direction(f64),
 }
 
+/// Whether a width answer is a width or a half-width (doubled to the width).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WidthScale {
+    Full,
+    Half,
+}
+
+impl WidthScale {
+    fn factor(self) -> f64 {
+        match self {
+            Self::Full => 1.0,
+            Self::Half => 2.0,
+        }
+    }
+}
+
 /// What the next answer is for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Stage {
     Idle,
     Param(Kind),
     End(Param),
-    WidthStart,
-    WidthEnd(f64),
+    WidthStart(WidthScale),
+    /// The start width, already scaled, and the scale of the end answer.
+    WidthEnd(f64, WidthScale),
+    /// The length of a straight segment along the direction of the last segment.
+    Length,
 }
 
 /// The path after the answers so far.
@@ -227,6 +261,12 @@ fn push_point(path: &mut Path, to: Point2, param: Option<Param>) -> Result<()> {
         None if path.arc => tangent_bulge(&path.vertices, to)?,
         None => 0.0,
     };
+    push_segment(path, to, bulge);
+    Ok(())
+}
+
+/// Adds the segment from the last vertex to `to` with `bulge`, at the current widths.
+fn push_segment(path: &mut Path, to: Point2, bulge: f64) {
     let index = path.vertices.len() - 1;
     path.vertices[index].bulge = bulge;
     path.vertices[index].start_width = path.width.0;
@@ -237,7 +277,6 @@ fn push_point(path: &mut Path, to: Point2, param: Option<Param>) -> Result<()> {
         start_width: 0.0,
         end_width: 0.0,
     });
-    Ok(())
 }
 
 /// Removes the last vertex; the new last vertex starts no segment.
@@ -265,7 +304,9 @@ fn idle(path: &mut Path, state: &PromptState<'_>, input: &PromptInput) -> Result
     match id {
         "arc" => path.arc = true,
         "line" => path.arc = false,
-        "width" => path.stage = Stage::WidthStart,
+        "width" => path.stage = Stage::WidthStart(WidthScale::Full),
+        "halfwidth" => path.stage = Stage::WidthStart(WidthScale::Half),
+        "length" => path.stage = Stage::Length,
         "undo" => undo(path),
         "close" => {
             path.closed = true;
@@ -285,13 +326,23 @@ fn apply(path: &mut Path, state: &PromptState<'_>, input: &PromptInput) -> Resul
             push_point(path, to, Some(param))?;
             path.stage = Stage::Idle;
         }
-        Stage::WidthStart => {
+        Stage::WidthStart(scale) => {
             let start = distance_of(state, input).ok_or_else(|| bad_value("width"))?;
-            path.stage = Stage::WidthEnd(start);
+            path.stage = Stage::WidthEnd(start * scale.factor(), scale);
         }
-        Stage::WidthEnd(start) => {
+        Stage::WidthEnd(start, scale) => {
             let end = distance_of(state, input).ok_or_else(|| bad_value("width"))?;
-            path.width = (start, end);
+            path.width = (start, end * scale.factor());
+            path.stage = Stage::Idle;
+        }
+        Stage::Length => {
+            let length = distance_of(state, input).ok_or_else(|| bad_value("length"))?;
+            let (before, last) = match path.vertices.as_slice() {
+                [.., before, last] => (*before, *last),
+                _ => return Err(bad_value("vertices")),
+            };
+            let direction = end_tangent(before.point, before.bulge, last.point);
+            push_segment(path, last.point + direction * length, 0.0);
             path.stage = Stage::Idle;
         }
         Stage::Idle => idle(path, state, input)?,
@@ -347,8 +398,10 @@ fn idle_prompt(path: &Path, key: String) -> Step {
         options.push(option("arc", OPTION_ARC, Some('a')));
     }
     options.push(option("width", OPTION_WIDTH, Some('w')));
+    options.push(option("halfwidth", OPTION_HALFWIDTH, None));
     options.push(option("undo", OPTION_UNDO, Some('u')));
     if path.vertices.len() >= 2 {
+        options.push(option("length", OPTION_LENGTH, None));
         options.push(option("close", OPTION_CLOSE, Some('c')));
     }
     options.push(option("end", OPTION_END, None));
@@ -382,10 +435,21 @@ fn next(state: &PromptState<'_>) -> Result<Step> {
             Step::Ask(Prompt::new(key, message.message_id, accept))
         }
         Stage::End(_) => Step::Ask(Prompt::new(key, END.message_id, point_accept())),
-        Stage::WidthStart => {
-            Step::Ask(Prompt::new(key, START_WIDTH.message_id, Accept::distance()))
+        Stage::WidthStart(scale) => {
+            let message = match scale {
+                WidthScale::Full => START_WIDTH,
+                WidthScale::Half => START_HALF_WIDTH,
+            };
+            Step::Ask(Prompt::new(key, message.message_id, Accept::distance()))
         }
-        Stage::WidthEnd(_) => Step::Ask(Prompt::new(key, END_WIDTH.message_id, Accept::distance())),
+        Stage::WidthEnd(_, scale) => {
+            let message = match scale {
+                WidthScale::Full => END_WIDTH,
+                WidthScale::Half => END_HALF_WIDTH,
+            };
+            Step::Ask(Prompt::new(key, message.message_id, Accept::distance()))
+        }
+        Stage::Length => Step::Ask(Prompt::new(key, LENGTH.message_id, Accept::distance())),
         Stage::Idle => idle_prompt(&path, key),
     })
 }
@@ -404,9 +468,13 @@ fn check(state: &PromptState<'_>, _: &Prompt, input: &PromptInput) -> Result<()>
             }
             bulge_for(param, last.point, to).map(|_| ())
         }
-        Stage::WidthStart | Stage::WidthEnd(_) => match distance_of(state, input) {
+        Stage::WidthStart(_) | Stage::WidthEnd(..) => match distance_of(state, input) {
             Some(width) if width >= 0.0 => Ok(()),
             _ => Err(bad_value("width")),
+        },
+        Stage::Length => match distance_of(state, input) {
+            Some(length) if length > 0.0 => Ok(()),
+            _ => Err(bad_value("length")),
         },
         Stage::Idle => idle_check(&path, state, input),
     }
@@ -428,7 +496,7 @@ fn idle_check(path: &Path, state: &PromptState<'_>, input: &PromptInput) -> Resu
     }
     match keyword_of(input) {
         Some("undo") if path.vertices.is_empty() => Err(Error::new(codes::NOTHING_TO_UNDO)),
-        Some("close" | "end") if path.vertices.len() < 2 => Err(bad_value("vertices")),
+        Some("close" | "end" | "length") if path.vertices.len() < 2 => Err(bad_value("vertices")),
         _ => Ok(()),
     }
 }
