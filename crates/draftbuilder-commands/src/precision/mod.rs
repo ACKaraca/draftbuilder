@@ -4,9 +4,11 @@
 //! ([`inquiry`]), and the planar user coordinate systems ([`ucs`]).
 
 pub mod inquiry;
+pub mod points;
 pub mod resolve;
 pub mod snaps;
 pub mod ucs;
+pub mod units;
 
 use arc_base::Result;
 use arc_command::Registry;
@@ -60,6 +62,13 @@ pub mod codes {
         category: Category::InvalidInput,
         message_id: "db-cmd-no-curve",
     };
+    /// A point modifier waits for a point, and the line gave text or an empty line instead: the
+    /// point comes from the pointer or the dynamic fields.
+    pub const POINT_PENDING: ErrorCode = ErrorCode {
+        code: "db.cmd.point_pending",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-point-pending",
+    };
     /// Every code of this module, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         UCS_UNKNOWN,
@@ -69,6 +78,7 @@ pub mod codes {
         NOT_CLOSED,
         POINTS_TOO_FEW,
         NO_CURVE,
+        POINT_PENDING,
     ];
 }
 
@@ -82,6 +92,7 @@ pub fn register(registry: &mut Registry) -> Result<()> {
     resolve::register(registry)?;
     inquiry::register(registry)?;
     ucs::register(registry)?;
+    units::register(registry)?;
     register_names(registry, Area::Precision)
 }
 

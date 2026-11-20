@@ -13,8 +13,9 @@ mod common;
 use arc_command::Permission;
 use arc_draft::snap::{ConstraintSource, SnapKind};
 use draftbuilder_commands::interaction::{
-    BandMode, Controller, CrossingPicker, DynamicMode, Event, LineRole, Outputs,
+    BandMode, Controller, CrossingPicker, DynamicMode, Event, LineRole, ModifierStep, Outputs,
 };
+use draftbuilder_commands::precision::points::Modifier;
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -461,4 +462,435 @@ fn redo_restores_the_line_that_undo_removed() {
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(segments(&env), vec![([0.0, 0.0], [10.0, 0.0])]);
     assert_eq!(out.history.last().map(|l| l.role), Some(LineRole::Redo));
+}
+
+/// The circles of the model space as (center, radius), in sorted order.
+fn circles(env: &Env) -> Vec<([f64; 2], f64)> {
+    let snapshot = env.document.snapshot();
+    let mut out: Vec<([f64; 2], f64)> = common::entity_ids(&snapshot)
+        .iter()
+        .filter_map(|id| {
+            let id = id.parse::<arc_base::ObjectId>().ok()?;
+            match common::curve_of_entity(&snapshot, id) {
+                arc_geom::Curve2::Circle(circle) => {
+                    let c = circle.center();
+                    Some(([c.x, c.y], circle.radius()))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]).then(a.0[1].total_cmp(&b.0[1])));
+    out
+}
+
+fn modifier_at(out: &Outputs) -> Option<(Modifier, ModifierStep)> {
+    out.modifier.map(|m| (m.modifier, m.step))
+}
+
+#[test]
+fn from_takes_an_endpoint_base_and_an_offset_from_it_in_the_dynamic_fields() {
+    let (mut env, mut c) = setup();
+    add_segment(&mut env, [0.0, 0.0], [10.0, 0.0]);
+    env.run("draftbuilder.precision.osnap", json!({"modes": "END"}));
+    submit(&env, &mut c, "LINE");
+    let out = submit(&env, &mut c, "FROM");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::First))
+    );
+    // The base is snapped to the endpoint; it is not the answer of the first point.
+    let out = click(&env, &mut c, 10.01, 0.01);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::Second))
+    );
+    assert!(out.prompt.is_some());
+    // The offset is 5 at 90 degrees from the base.
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "5".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "90".to_owned(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.modifier, None);
+    assert_eq!(c.answers(), 1);
+    click(&env, &mut c, 20.0, 5.0);
+    submit(&env, &mut c, "");
+    assert_eq!(
+        segments(&env),
+        vec![([0.0, 0.0], [10.0, 0.0]), ([10.0, 5.0], [20.0, 5.0])]
+    );
+}
+
+#[test]
+fn a_hole_centre_from_an_endpoint_offset_takes_a_typed_radius() {
+    // W01 step 4: a circle whose centre is an offset from a snapped endpoint.
+    let (mut env, mut c) = setup();
+    add_segment(&mut env, [0.0, 0.0], [10.0, 0.0]);
+    env.run("draftbuilder.precision.osnap", json!({"modes": "END"}));
+    submit(&env, &mut c, "CIRCLE");
+    submit(&env, &mut c, "FROM");
+    click(&env, &mut c, 10.0, 0.01);
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "4".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "180".to_owned(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let out = submit(&env, &mut c, "2");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(out.prompt.is_none());
+    let found = circles(&env);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(near(found[0].0, [6.0, 0.0]), "{found:?}");
+    assert!((found[0].1 - 2.0).abs() < 1e-9, "{found:?}");
+}
+
+#[test]
+fn a_temporary_track_origin_aligns_the_next_point_only() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    let out = submit(&env, &mut c, "TEMPTRACK");
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::TempTrack, ModifierStep::First))
+    );
+    let out = click(&env, &mut c, 3.0, 4.0);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::TempTrack, ModifierStep::Second))
+    );
+    // The horizontal path through the origin pulls the point to y = 4.
+    let out = move_to(&env, &mut c, 8.0, 4.02);
+    assert_eq!(
+        out.cursor.map(|c| c.source),
+        Some(ConstraintSource::Tracking)
+    );
+    assert!(near(out.cursor.unwrap().point, [8.0, 4.0]));
+    let out = click(&env, &mut c, 8.0, 4.02);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.modifier, None);
+    // One-shot: the origin no longer offers a path for the next point.
+    let out = move_to(&env, &mut c, 20.0, 4.02);
+    assert!(out.tracking.is_empty(), "{:?}", out.tracking);
+    click(&env, &mut c, 20.0, 4.0);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([8.0, 4.0], [20.0, 4.0])]);
+}
+
+#[test]
+fn mid_between_answers_with_the_midpoint_of_two_points() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "MIDBETWEEN");
+    let out = click(&env, &mut c, 0.0, 0.0);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::MidBetween, ModifierStep::Second))
+    );
+    let out = click(&env, &mut c, 10.0, 4.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.modifier, None);
+    click(&env, &mut c, 20.0, 2.0);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([5.0, 2.0], [20.0, 2.0])]);
+}
+
+#[test]
+fn a_waiting_modifier_reads_typed_text_as_its_point_and_an_empty_line_is_refused() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "FROM");
+    // A typed point is the base; the empty line has no point to give.
+    let out = submit(&env, &mut c, "5,5");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::Second))
+    );
+    let out = submit(&env, &mut c, "");
+    assert_eq!(errors_of(&out), vec!["db.cmd.point_pending"]);
+    let out = send(&env, &mut c, Event::Escape);
+    assert_eq!(out.modifier, None);
+    assert!(
+        out.prompt.is_some(),
+        "Escape ends the modifier, not the command"
+    );
+    let out = send(&env, &mut c, Event::Option("MIDBETWEEN".to_owned()));
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::MidBetween, ModifierStep::First))
+    );
+}
+
+#[test]
+fn a_world_prefix_reads_past_the_user_coordinate_system_and_a_typed_point_reads_in_it() {
+    // DB-SNAP-021: `*` forces world coordinates; a plain typed point is in the current system.
+    let (mut env, mut c) = setup();
+    env.run(
+        "draftbuilder.precision.ucs",
+        json!({"mode": "origin", "origin": [1.0, 1.0], "x_point": [2.0, 1.0]}),
+    );
+    submit(&env, &mut c, "LINE");
+    let out = submit(&env, &mut c, "*3,4");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let out = submit(&env, &mut c, "3,4");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([3.0, 4.0], [4.0, 5.0])]);
+}
+
+#[test]
+fn a_typed_architectural_length_is_read_in_the_drawing_units() {
+    // DB-SNAP-024 on the command line: feet and inches are read by the prompt's solver.
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "0,0");
+    let out = submit(&env, &mut c, "@3'-6\",0");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    let (start, end) = segments(&env)[0];
+    assert!(near(start, [0.0, 0.0]));
+    assert!(
+        (end[0] - 1.0668).abs() < 1e-9 && end[1].abs() < 1e-9,
+        "{end:?}"
+    );
+}
+
+/// A new drawing of `unit` and a controller for it.
+fn setup_in(unit: &str) -> (Env, Controller) {
+    let mut env = Env::new();
+    env.run("draftbuilder.drawing.new", json!({"unit": unit}));
+    (env, Controller::new().unwrap())
+}
+
+fn set_ortho(env: &mut Env) {
+    env.run(
+        "draftbuilder.settings.set",
+        json!({"name": "draft.ortho", "value": true}),
+    );
+}
+
+#[test]
+fn an_option_that_answers_the_prompt_ends_a_waiting_modifier() {
+    // The circle's first prompt offers the options two and three; the keyword answers the prompt
+    // and the waiting FROM ends with it, so the next click is a point of the prompt it answers.
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "CIRCLE");
+    submit(&env, &mut c, "FROM");
+    let out = click(&env, &mut c, 10.0, 0.0);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::Second))
+    );
+    let out = send(&env, &mut c, Event::Option("two".to_owned()));
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.modifier, None);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("p1"));
+    let out = click(&env, &mut c, 20.0, 0.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.prompt.as_ref().map(|p| p.key.as_str()), Some("p2"));
+    assert_eq!(out.modifier, None);
+}
+
+#[test]
+fn midbetween_at_the_second_point_of_a_line_ignores_the_last_point_under_ortho() {
+    let (mut env, mut c) = setup();
+    set_ortho(&mut env);
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    submit(&env, &mut c, "MIDBETWEEN");
+    // Without ortho from the last point, the picks are exact; the midpoint is (15, 5).
+    click(&env, &mut c, 10.0, 3.0);
+    let out = click(&env, &mut c, 20.0, 7.0);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([0.0, 0.0], [15.0, 5.0])]);
+}
+
+#[test]
+fn from_at_the_second_point_of_a_line_ignores_the_last_point_under_ortho() {
+    let (mut env, mut c) = setup();
+    set_ortho(&mut env);
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    submit(&env, &mut c, "FROM");
+    click(&env, &mut c, 10.0, 3.0);
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "5".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "90".to_owned(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([0.0, 0.0], [10.0, 8.0])]);
+}
+
+#[test]
+fn a_direct_distance_typed_right_after_from_has_no_direction_from_the_base() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    submit(&env, &mut c, "FROM");
+    click(&env, &mut c, 10.0, 3.0);
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "5".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "90".to_owned(),
+        },
+    );
+    let out = submit(&env, &mut c, "");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(
+        out.cursor.is_none(),
+        "the cursor the modifier aligned is dropped at once"
+    );
+    // The FROM base (10, 3) to the offset point is straight up; a direction from it would
+    // place the distance 5 at (10, 13). No direction is set, so the typed distance is refused.
+    let out = submit(&env, &mut c, "5");
+    assert_eq!(errors_of(&out), vec!["cmd.prompt.no_direction"]);
+    assert!(out.prompt.is_some());
+}
+
+#[test]
+fn from_in_a_millimeter_drawing_takes_its_base_and_offset_in_drawing_units() {
+    let (mut env, mut c) = setup_in("millimeter");
+    add_segment(&mut env, [0.0, 0.0], [10.0, 0.0]);
+    env.run("draftbuilder.precision.osnap", json!({"modes": "END"}));
+    // Events are in meters; one drawing unit is a millimeter. The aperture is 0.05 mm.
+    let tight = 0.000_05;
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "FROM");
+    let out = send(
+        &env,
+        &mut c,
+        Event::Click {
+            at: [0.010, 0.000_02],
+            aperture: tight,
+        },
+    );
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::Second))
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 0,
+            text: "5".to_owned(),
+        },
+    );
+    send(
+        &env,
+        &mut c,
+        Event::Field {
+            index: 1,
+            text: "90".to_owned(),
+        },
+    );
+    submit(&env, &mut c, "");
+    let out = send(
+        &env,
+        &mut c,
+        Event::Click {
+            at: [0.020, 0.005],
+            aperture: tight,
+        },
+    );
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    submit(&env, &mut c, "");
+    assert_eq!(
+        segments(&env),
+        vec![([0.0, 0.0], [10.0, 0.0]), ([10.0, 5.0], [20.0, 5.0])]
+    );
+}
+
+#[test]
+fn from_under_a_rotated_user_coordinate_system_reads_typed_base_and_offset_in_that_system() {
+    let (mut env, mut c) = setup();
+    // The X axis of the system is the world Y axis; its Y axis is the world negative X axis.
+    env.run(
+        "draftbuilder.precision.ucs",
+        json!({"mode": "origin", "origin": [1.0, 1.0], "x_point": [1.0, 2.0]}),
+    );
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "FROM");
+    // (2, 0) in the system is the world point (1, 3).
+    let out = submit(&env, &mut c, "2,0");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::Second))
+    );
+    // Unprefixed coordinates are an offset from the base, in the system: (0, 4) in the world.
+    let out = submit(&env, &mut c, "4,0");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(out.modifier, None);
+    // (5, 5) absolute in the system is the world point (-4, 6).
+    submit(&env, &mut c, "5,5");
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env), vec![([1.0, 7.0], [-4.0, 6.0])]);
+}
+
+#[test]
+fn a_typed_text_the_point_reader_refuses_keeps_the_modifier_waiting() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    submit(&env, &mut c, "FROM");
+    let out = submit(&env, &mut c, "not a point");
+    assert_eq!(errors_of(&out), vec!["cmd.prompt.unreadable"]);
+    assert_eq!(
+        modifier_at(&out),
+        Some((Modifier::From, ModifierStep::First))
+    );
 }

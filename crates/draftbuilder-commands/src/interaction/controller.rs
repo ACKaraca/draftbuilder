@@ -6,22 +6,31 @@ use std::sync::Arc;
 
 use arc_base::{Error, ObjectId, Result};
 use arc_command::history::{self, Direction};
+use arc_command::prompt::PromptSession;
 use arc_command::{
-    Accept, CommandLine, Permission, Point, PromptInput, Session, Submitted, Surface, Target,
+    Accept, CommandLine, Feedback, Permission, Point, PromptInput, Session, Submitted, Surface,
+    Target,
 };
 use arc_doc::{Document, Snapshot};
 use serde_json::Map;
 
+use super::acquire::{self, Acquire, Taken};
 use super::band;
 use super::fields::Fields;
 use super::resolution::{Resolved, Resolver};
 use super::{
     BandMode, BandOut, CursorOut, ErrorOut, Event, Expect, HistoryLine, LineRole, MAX_HISTORY,
-    ObjectPicker, OptionOut, Outputs, PromptOut, SnapOut,
+    ModifierOut, ObjectPicker, OptionOut, Outputs, PromptOut, SnapOut,
 };
 use crate::draw::create::from_meters;
+use crate::draw::create::meters_per_unit;
+use crate::precision::points::{self, Modifier};
 use crate::select::{Mode, combine};
 use crate::settings::store::Values;
+
+/// The command whose point prompt reads typed points for a waiting modifier: a single point, with
+/// no other effect.
+const PROBE_COMMAND: &str = "draftbuilder.inquiry.id";
 
 /// What a click on a prompt can answer, from the accepted inputs of the prompt.
 #[derive(Debug, Clone, Copy, Default)]
@@ -62,6 +71,8 @@ pub struct Controller {
     /// The last resolved cursor and the raw pointer position it came from.
     cursor: Option<(Resolved, [f64; 2])>,
     history: Vec<HistoryLine>,
+    /// The point modifier that waits for points.
+    acquire: Acquire,
     seed: u64,
 }
 
@@ -83,6 +94,7 @@ impl Controller {
             window: None,
             cursor: None,
             history: Vec::new(),
+            acquire: Acquire::Idle,
             seed: 1,
         })
     }
@@ -129,7 +141,7 @@ impl Controller {
     /// window or a locked dynamic field.
     #[must_use]
     pub fn busy(&self) -> bool {
-        self.window.is_some() || self.fields.any_locked()
+        self.window.is_some() || self.fields.any_locked() || self.acquire.pending()
     }
 
     /// The window's state for `document` after the document changed outside the controller (a
@@ -180,8 +192,11 @@ impl Controller {
         step: impl FnOnce(&mut CommandLine, &Target<'_>) -> Result<T>,
     ) -> Result<T> {
         let snapshot = document.snapshot();
-        // Typed numbers take the units of the drawing, as in the script runner.
+        // Typed numbers take the units of the drawing, as in the script runner; typed points read in
+        // the current user coordinate system.
         self.session.units = crate::script::session_units(&snapshot);
+        self.line
+            .set_transform(crate::precision::ucs::plane_transform(&snapshot)?);
         let selection = self.session.current_selection(&snapshot);
         let localized = BTreeMap::new();
         let seed = self.next_seed();
@@ -205,6 +220,17 @@ impl Controller {
             role: LineRole::Input,
             text: text.to_owned(),
         });
+        if let Some(modifier) = self.typed_modifier(text) {
+            self.start_modifier(modifier);
+            return;
+        }
+        if self.acquire.pending() {
+            match self.typed_point(document, text) {
+                Ok(point) => self.give_point(document, point, errors),
+                Err(error) => errors.push(error_out(&error)),
+            }
+            return;
+        }
         let result = self.with_line(document, |line, target| line.submit(target, text));
         self.settle(result, errors);
     }
@@ -215,8 +241,14 @@ impl Controller {
         if self.line.active().is_some() {
             if self.fields.any_locked() {
                 if let Some(point) = self.compose(document, errors) {
-                    self.answer(document, PromptInput::Point(point_of(point)), errors);
+                    self.give_point(document, point, errors);
                 }
+                return;
+            }
+            if self.acquire.pending() {
+                errors.push(error_out(&Error::new(
+                    crate::precision::codes::POINT_PENDING,
+                )));
                 return;
             }
             let result = self.with_line(document, |line, target| line.submit(target, ""));
@@ -236,9 +268,120 @@ impl Controller {
     fn compose(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) -> Option<[f64; 2]> {
         let (resolved, _) = self.cursor.clone()?;
         let snapshot = document.snapshot();
-        let base = self.line.base_point().map(|p| [p.x, p.y]);
+        let base = self.point_base();
         let composed = self.fields.compose(&snapshot, base, resolved.point);
         push_result(errors, composed)
+    }
+
+    /// The base point of the point prompt: the base of a `FROM` offset while it waits, else the
+    /// command's last point.
+    /// While a modifier waits, the base is the FROM base at its offset step and none otherwise: the
+    /// command's last point does not measure a modifier's points.
+    fn point_base(&self) -> Option<[f64; 2]> {
+        if self.acquire.pending() {
+            return self.acquire.base();
+        }
+        self.line.base_point().map(|p| [p.x, p.y])
+    }
+
+    /// The modifier a typed line names while a point prompt waits and the prompt does not offer
+    /// the same keyword itself.
+    fn typed_modifier(&self, text: &str) -> Option<Modifier> {
+        if !self.point_prompt() || self.prompt_claims(text) {
+            return None;
+        }
+        points::modifier_of(text)
+    }
+
+    /// Whether the active prompt accepts a point.
+    fn point_prompt(&self) -> bool {
+        self.line
+            .active()
+            .and_then(|s| s.prompt())
+            .is_some_and(|p| Wants::of(&p.accepts).point)
+    }
+
+    /// Whether the active prompt's keyword options claim `text` (the command's word wins).
+    fn prompt_claims(&self, text: &str) -> bool {
+        self.line
+            .active()
+            .and_then(|s| s.prompt())
+            .is_some_and(|p| acquire::claimed_by(p, text))
+    }
+
+    fn start_modifier(&mut self, modifier: Modifier) {
+        self.acquire = Acquire::start(modifier);
+        self.fields.clear();
+    }
+
+    /// Ends a waiting modifier, if one waits: its origin, the cursor it aligned and the pointer
+    /// direction it measured from are dropped at once.
+    fn drop_modifier(&mut self) {
+        if self.acquire.pending() {
+            self.acquire = Acquire::Idle;
+            self.end_state();
+        }
+    }
+
+    /// The state a finished modifier leaves: no locks, no temporary origin, no cursor and no
+    /// pointer direction (the next move sets the direction from the command's last point).
+    fn end_state(&mut self) {
+        self.fields.clear();
+        self.resolver.set_only(None);
+        self.cursor = None;
+        let _ = self.line.set_pointer_direction(None);
+    }
+
+    /// Reads typed text as one point while a modifier waits, with the foundation's point reader:
+    /// the prompt's coordinate forms, the current user coordinate system and the defaults. The last
+    /// point is the command's, except at a FROM offset, where unprefixed coordinates are relative to
+    /// the base. Returns the point in meters.
+    fn typed_point(&self, document: &Document, text: &str) -> Result<[f64; 2]> {
+        let snapshot = document.snapshot();
+        let mut entry = self.line.point_entry().clone();
+        let last = match self.acquire.base() {
+            Some(base) => {
+                entry.set_relative_default(true);
+                Some(base)
+            }
+            None => self.line.base_point().map(|p| [p.x, p.y]),
+        };
+        entry.set_last_point(last.map(point_of))?;
+        let spec = self
+            .registry
+            .get(PROBE_COMMAND)
+            .cloned()
+            .ok_or_else(|| Error::new(crate::error::codes::VALUE_INVALID))?;
+        let (mut probe, _) =
+            PromptSession::start_with_entry(spec, Map::new(), &self.session, &snapshot, entry);
+        match probe.answer_text(text, &snapshot) {
+            Feedback::Done(invocation) => {
+                let point = invocation
+                    .params
+                    .get("point")
+                    .and_then(|v| serde_json::from_value::<[f64; 2]>(v.clone()).ok())
+                    .ok_or_else(|| Error::new(arc_command::error::codes::PROMPT_UNREADABLE))?;
+                let mpu = meters_per_unit(&snapshot);
+                Ok([point[0] * mpu, point[1] * mpu])
+            }
+            Feedback::Rejected { error, .. } => Err(error),
+            _ => Err(Error::new(arc_command::error::codes::PROMPT_UNREADABLE)),
+        }
+    }
+
+    /// Gives `point` (meters) to the point modifier that waits, or answers the active prompt with
+    /// it when none waits.
+    fn give_point(&mut self, document: &Document, point: [f64; 2], errors: &mut Vec<ErrorOut>) {
+        let waiting = self.acquire.pending();
+        match self.acquire.take(point) {
+            Taken::Kept => self.fields.clear(),
+            Taken::Answer(answer) => {
+                if waiting {
+                    self.end_state();
+                }
+                self.answer(document, PromptInput::Point(point_of(answer)), errors);
+            }
+        }
     }
 
     fn answer(&mut self, document: &Document, input: PromptInput, errors: &mut Vec<ErrorOut>) {
@@ -258,8 +401,14 @@ impl Controller {
                 self.command_ended();
             }
             Some(Submitted::Cancelled) => self.command_ended(),
-            Some(Submitted::Rejected { error, .. }) => errors.push(error_out(&error)),
-            Some(Submitted::Prompt(_) | Submitted::Idle) => self.fields.clear(),
+            Some(Submitted::Rejected { error, .. }) => {
+                errors.push(error_out(&error));
+                self.drop_modifier();
+            }
+            Some(Submitted::Prompt(_) | Submitted::Idle) => {
+                self.fields.clear();
+                self.drop_modifier();
+            }
             None => {}
         }
     }
@@ -269,12 +418,17 @@ impl Controller {
     fn command_ended(&mut self) {
         self.fields.clear();
         self.resolver.clear_acquired();
+        self.acquire = Acquire::Idle;
         self.cursor = None;
     }
 
     fn escape(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
         if self.fields.any_locked() {
             self.fields.clear();
+            return;
+        }
+        if self.acquire.pending() {
+            self.drop_modifier();
             return;
         }
         if self.window.take().is_some() {
@@ -300,10 +454,21 @@ impl Controller {
         if self.line.active().is_none() {
             return;
         }
+        let modifier = points::modifier_of(&id).filter(|_| self.point_prompt());
+        if let Some(modifier) = modifier.filter(|_| !self.prompt_claims(&id)) {
+            self.start_modifier(modifier);
+            return;
+        }
+        // Another option answers the prompt: a waiting modifier ends first.
+        self.drop_modifier();
         self.answer(document, PromptInput::Keyword(id), errors);
     }
 
     fn undo(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
+        if self.acquire.pending() {
+            self.drop_modifier();
+            return;
+        }
         if self.line.active().is_some() {
             let result = self.with_line(document, |line, target| line.back(target));
             self.settle(result, errors);
@@ -365,7 +530,8 @@ impl Controller {
             return None;
         };
         let values = Values::of(&snapshot, &|key: &str| self.session.setting(key));
-        let base = self.line.base_point().map(|p| [p.x, p.y]);
+        let base = self.point_base();
+        self.resolver.set_only(self.acquire.origin());
         let resolved = self
             .resolver
             .resolve(&snapshot, space, &values, at, aperture, base);
@@ -400,6 +566,18 @@ impl Controller {
             .active()
             .and_then(|s| s.prompt())
             .map(|p| Wants::of(&p.accepts));
+        if self.acquire.pending() && prompt_wants.is_some_and(|w| w.point) {
+            let point = if self.fields.any_locked() {
+                match self.compose(document, errors) {
+                    Some(p) => p,
+                    None => return,
+                }
+            } else {
+                resolved.point
+            };
+            self.give_point(document, point, errors);
+            return;
+        }
         let object = match prompt_wants {
             Some(wants) if wants.pick || wants.selection => {
                 pick_at(picker, &snapshot, at, aperture)
@@ -505,7 +683,7 @@ impl Controller {
             .as_ref()
             .is_some_and(|p| p.expects.contains(&Expect::Point));
         let cursor = self.cursor.as_ref().map(|(r, _)| r);
-        let base = self.line.base_point().map(|p| [p.x, p.y]);
+        let base = self.point_base();
         let band = match (self.window, self.cursor.as_ref()) {
             (Some(start), Some((_, at))) => Some(BandOut {
                 base: start,
@@ -540,6 +718,10 @@ impl Controller {
                 point: r.point,
                 source: r.source,
             }),
+            modifier: self
+                .acquire
+                .waiting()
+                .map(|(modifier, step)| ModifierOut { modifier, step }),
             errors,
         }
     }

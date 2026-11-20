@@ -459,6 +459,12 @@ pub const NAMES: &[Name] = &[
         aliases: &[],
     },
     Name {
+        id: "draftbuilder.precision.units",
+        area: Area::Precision,
+        typed: Some("UNITS"),
+        aliases: &[],
+    },
+    Name {
         id: "draftbuilder.inquiry.list",
         area: Area::Precision,
         typed: Some("LIST"),

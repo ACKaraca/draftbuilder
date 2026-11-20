@@ -31,6 +31,7 @@
 //! Every command runs through [`arc_command::Invoker`], so the rules of the registry hold for
 //! typed, pointer and repeated runs alike.
 
+mod acquire;
 mod band;
 mod controller;
 mod fields;
@@ -40,7 +41,10 @@ use arc_base::ObjectId;
 use arc_doc::Snapshot;
 use arc_draft::snap::{ConstraintSource, SnapKind};
 
+pub use acquire::ModifierStep;
 pub use controller::Controller;
+
+use crate::precision::points::Modifier;
 
 /// What a prompt accepts, as the window shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +309,17 @@ pub struct Outputs {
     pub selection: Vec<ObjectId>,
     /// The resolved cursor, for the status display.
     pub cursor: Option<CursorOut>,
+    /// The point modifier that waits for a point, when one does.
+    pub modifier: Option<ModifierOut>,
     /// The errors of this event.
     pub errors: Vec<ErrorOut>,
+}
+
+/// A point modifier that waits for a point (DB-SNAP-010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModifierOut {
+    /// The modifier.
+    pub modifier: Modifier,
+    /// The point it waits for.
+    pub step: ModifierStep,
 }

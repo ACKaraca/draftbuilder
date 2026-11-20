@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::Env;
+use common::{Env, lines as lines_of};
 use draftbuilder_commands::precision::ucs;
 use serde_json::{Value as Json, json};
 
@@ -480,4 +480,109 @@ fn an_inquiry_takes_at_most_ten_thousand_points() {
         code_of(env.invoke("draftbuilder.inquiry.area", json!({"points": points}))),
         "db.cmd.limit_exceeded"
     );
+}
+
+#[test]
+fn units_change_the_formats_of_the_drawing_and_never_its_coordinates() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    segment(&mut env, [1.23456, 2.5], [3.0, 4.0]);
+    let stored = lines_of(&env.document.snapshot());
+    let result = env.run(
+        "draftbuilder.precision.units",
+        json!({
+            "length_format": "fractional",
+            "length_precision": 3,
+            "angle_format": "grads",
+            "clockwise": true
+        }),
+    );
+    assert_eq!(result["settings"].as_array().map(Vec::len), Some(6));
+    let read = |env: &mut Env, name: &str| {
+        env.run("draftbuilder.settings.get", json!({"name": name}))["value"].clone()
+    };
+    assert_eq!(read(&mut env, "draft.units.length"), json!(5));
+    assert_eq!(read(&mut env, "draft.units.length_precision"), json!(3));
+    assert_eq!(read(&mut env, "draft.units.angle"), json!(2));
+    assert_eq!(read(&mut env, "draft.angle.direction"), json!(1));
+    assert_eq!(lines_of(&env.document.snapshot()), stored);
+    assert!(env.document.undo().wait().unwrap().value);
+    assert_eq!(read(&mut env, "draft.units.length"), json!(2));
+    assert_eq!(read(&mut env, "draft.units.length_precision"), json!(4));
+    assert_eq!(read(&mut env, "draft.angle.direction"), json!(0));
+}
+
+#[test]
+fn units_refuse_values_outside_their_settings() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    let refused = env.invoke(
+        "draftbuilder.precision.units",
+        json!({"length_precision": 9}),
+    );
+    assert!(refused.is_err());
+    assert!(
+        env.invoke(
+            "draftbuilder.precision.units",
+            json!({"length_format": "hex"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn an_invalid_second_value_leaves_the_first_unchanged() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    let refused = env.invoke(
+        "draftbuilder.precision.units",
+        json!({"length_format": "fractional", "length_precision": 9}),
+    );
+    assert!(refused.is_err());
+    let length = env.run(
+        "draftbuilder.settings.get",
+        json!({"name": "draft.units.length"}),
+    );
+    assert_eq!(length["value"], json!(2), "the first value is not written");
+}
+
+#[test]
+fn units_survive_a_dxf_save_and_reopen_with_the_same_header_values() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    env.run(
+        "draftbuilder.precision.units",
+        json!({
+            "length_format": "architectural",
+            "length_precision": 3,
+            "angle_format": "grads",
+            "clockwise": true
+        }),
+    );
+    let out = env.path("units.dxf");
+    env.run("draftbuilder.drawing.save", json!({"path": out.clone()}));
+    // A fresh session opens the saved file, as a reopen does.
+    let mut again = Env::new();
+    let copy = again.path("units.dxf");
+    std::fs::copy(&out, &copy).unwrap();
+    again.run("draftbuilder.drawing.open_dxf", json!({"path": copy}));
+    let read = |env: &mut Env, name: &str| {
+        env.run("draftbuilder.settings.get", json!({"name": name}))["value"].clone()
+    };
+    assert_eq!(read(&mut again, "draft.units.length"), json!(4));
+    assert_eq!(read(&mut again, "draft.units.length_precision"), json!(3));
+    assert_eq!(read(&mut again, "draft.units.angle"), json!(2));
+    assert_eq!(read(&mut again, "draft.angle.direction"), json!(1));
+}
+
+#[test]
+fn units_without_parameters_add_no_undo_step() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    segment(&mut env, [0.0, 0.0], [1.0, 0.0]);
+    let result = env.invoke("draftbuilder.precision.units", json!({}));
+    assert!(result.is_ok(), "{result:?}");
+    // One undo must take back the segment, the last real step: the empty units run recorded none.
+    assert!(env.document.undo().wait().unwrap().value);
+    assert!(lines_of(&env.document.snapshot()).is_empty());
 }

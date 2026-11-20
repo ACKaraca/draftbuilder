@@ -43,6 +43,9 @@ pub(super) struct Resolver {
     builds: u64,
     /// Acquired points in meters, oldest first.
     acquired: Vec<[f64; 2]>,
+    /// The temporary tracking origin of the next point, in meters, when a `TEMPTRACK` waits for it:
+    /// the only origin the tracking paths run from.
+    only: Option<[f64; 2]>,
 }
 
 impl Resolver {
@@ -54,6 +57,12 @@ impl Resolver {
     /// Forgets the acquired tracking points (at the end of a command).
     pub(super) fn clear_acquired(&mut self) {
         self.acquired.clear();
+        self.only = None;
+    }
+
+    /// Sets the temporary tracking origin of the next point (meters), or none.
+    pub(super) fn set_only(&mut self, origin: Option<[f64; 2]>) {
+        self.only = origin;
     }
 
     /// The index of `space` at the revision of `snapshot`, built now when the cached one is for
@@ -130,9 +139,12 @@ impl Resolver {
         // Tracking runs on the points acquired so far, and only while no object snap decides.
         let mut tracking = Vec::new();
         let mut tracked = None;
-        if snapped.is_none() && !self.acquired.is_empty() {
-            let acquired: Vec<Point2> = self
-                .acquired
+        let origins: &[[f64; 2]] = match self.only.as_ref() {
+            Some(origin) => std::slice::from_ref(origin),
+            None => self.acquired.as_slice(),
+        };
+        if snapped.is_none() && !origins.is_empty() {
+            let acquired: Vec<Point2> = origins
                 .iter()
                 .map(|p| Point2::new(from_meters(snapshot, p[0]), from_meters(snapshot, p[1])))
                 .collect();

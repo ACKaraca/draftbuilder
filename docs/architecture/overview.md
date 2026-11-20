@@ -489,11 +489,11 @@ centroidal axes: `second_moment_about_x` is `∫ y² dA`, `second_moment_about_y
 (10,000) entries (`db.cmd.limit_exceeded`). A self-intersecting point sequence is measured as its boundary
 runs: the area of the loops it encloses, with their orientation; it is not refused. The inquiry commands
 have the command names `draftbuilder.inquiry.*`; the typed names `DIST`, `ID`, `AREA`, `LIST` and
-`MASSPROP` are the only typed names of the inquiry area. Length, resolve and filter have no typed names.
+`MASSPROP` are the only typed names of the inquiry area. Length, resolve and filter have no typed names;
+`UNITS` is the typed name of the unit formats.
 
 Not built: profiles; the display formats other than decimal; 3D point filters and coordinate systems;
-the UCS icon, plan view and dynamic UCS; the feed of the point entry by the interactive host; the drawing
-limits check at point entry.
+the UCS icon, plan view and dynamic UCS; the drawing limits check at point entry.
 
 Foundation gaps in this area, reported to the foundation and not compensated in the product:
 
@@ -660,6 +660,33 @@ the selection methods.
 - A transparent line (`'` prefix) runs beside the waiting command through the command line's rules.
 - Locked dynamic fields (distance and angle from the last point, or X and Y) compose the point on Enter
   or a click; an invalid number is `db.cmd.value_invalid` and keeps the prompt.
+- Point modifiers (DB-SNAP-010) are one-shot: while a point prompt waits, the keyword `FROM`, `TEMPTRACK`
+  or `MIDBETWEEN` (typed, or as `Event::Option`) starts one. A keyword that the prompt's own options
+  claim (by identifier or one-letter shortcut, not by label) is the command's, and no modifier starts
+  (`interaction::acquire::claimed_by`). `FROM` takes a base point, snapped like any pick, and then the
+  point of its offset step: the dynamic fields or a click are measured from the base, and typed
+  unprefixed coordinates are relative to it. `TEMPTRACK` takes an origin, and the next point is
+  aligned with that origin only. `MIDBETWEEN` takes two points and answers the prompt with their
+  midpoint. While a modifier waits, typed text is read as its point by the foundation's point reader
+  (the prompt's forms, the current user coordinate system and the defaults). An empty line is refused
+  with `db.cmd.point_pending`. Escape, undo, another option that answers the prompt, and the end of the
+  command drop the modifier at once, with its temporary origin, cursor and pointer direction. While a
+  modifier waits, the command's last point does not measure its points, except the offset of `FROM`.
+  Only the last point of a modifier answers the prompt (`precision::points`, `interaction::acquire`).
+  Output: `Outputs::modifier`.
+- Typed points read in the current user coordinate system: before each command-line step the controller
+  sets the plane transform of `precision::ucs`, as the script runner does.
+- `UNITS` (`draftbuilder.precision.units`, DB-SNAP-030) sets the length and angle formats, their
+  precision, the angle base and the clockwise flag as drawing settings: one undoable step, validated
+  by each setting's own range, and no stored coordinate changes (`precision::units`).
+- Not built in the precision area, as foundation or window gaps: cylindrical and spherical typed points
+  (DB-SNAP-020: the foundation point reader has no such form, so the row is not compensated here);
+  dynamic-field values are plain decimal numbers in drawing units, so feet-and-inches and bearings are
+  typed on the command line only (DB-SNAP-024); the dynamic fields also ignore the current user
+  coordinate system and the drawing's angle base, while typed points honour both: a known gap of
+  DB-SNAP-021 (the fields are measured in world coordinates from the base); the isometric and polar snap styles and the
+  isometric planes (DB-SNAP-017, 018); the 3D point filters (DB-SNAP-011); the snap marker cycling
+  with Tab and the tracking entry mode (DB-SNAP-009, 023); the grid display (DB-SNAP-016).
 
 The host supplies the object pick through `ObjectPicker`; the headless `CrossingPicker` picks the
 topmost object whose curves cross the pick box.
