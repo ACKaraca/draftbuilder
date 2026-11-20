@@ -109,10 +109,7 @@ fn start() -> Result<(), String> {
         application: format!("draftbuilder {}", env!("CARGO_PKG_VERSION")),
         time_unix_ms: now_millis(),
     };
-    let os_locales: Vec<String> = ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .iter()
-        .filter_map(|n| std::env::var(n).ok())
-        .collect();
+    let os_locales = draftbuilder::os_locales();
     let localizer = draftbuilder::localizer(&os_locales).map_err(fail)?;
     let with = |e: Error| draftbuilder::describe(&e, draftbuilder::localizer(&[]).ok().as_ref());
     let dir = data_dir();

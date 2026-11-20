@@ -17,6 +17,11 @@ arc-draft = { workspace = true }
 arc-gpu = { workspace = true, features = ["draft"] }
 arc-ui = { workspace = true }
 draftbuilder-commands = { path = "../../crates/draftbuilder-commands" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+arc-draft-dxf = { workspace = true }
+arc-geom = { workspace = true }
 
 [lints]
 workspace = true

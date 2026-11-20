@@ -658,17 +658,53 @@ the selection methods.
 The host supplies the object pick through `ObjectPicker`; the headless `CrossingPicker` picks the
 topmost object whose curves cross the pick box.
 
-**Not in the window yet.** `apps/draftbuilder` has no glue to this controller. The foundation's shell
-does not expose the hooks the glue needs: the viewport answers clicks itself without snapping and
-selects through its own picking (`arc-ui` `gesture`), the shell's `View` and its command line are
-private, the product's tools are registered but never instantiated, and no overlay accepts the
-controller's rubber band, snap marker or dynamic input. The window does not use the controller until
-those hooks exist. Angle fields are in degrees; coordinate format settings (polar or cartesian,
-relative or absolute) and the hover highlight of DB-SEL-011 are not built.
+**In the window.** `apps/draftbuilder/src/interaction.rs` adapts the controller to the shell's
+`Interaction` trait of `arc-app`: the product registers a factory, and each tab owns one controller.
+The adapter only translates.
+
+- Units. The controller works in meters; the drawing and the viewport work in drawing units, which the
+  arc-gpu draft extractor draws as stored (the space unit sets only linetype and plot scale). The
+  adapter multiplies points and apertures by `meters_per_unit` going in and divides overlay points
+  going out. A new drawing is metric, so its unit is the millimeter.
+- Permissions. Before each event the adapter hands the host session's permissions to the controller
+  (`set_permissions`). The controller's commands and history steps need `Edit` in that set. The
+  pinned foundation gives the shell's session `Edit` on every tab, so on a read-only tab this holds
+  only after the foundation stops giving `Edit` there.
+- Pointer. A primary click becomes `Click` and a hover `Move`, with a pick aperture of five pixels
+  converted to drawing units and then to meters. A non-finite or non-positive pixel scale is treated as
+  absent, and the event is not consumed.
+- Command line. Submitted lines become `Submit`; a repeat (Enter on an empty line with no command)
+  becomes an empty `Submit`; Escape and cancel become `Escape`; undo and redo become `Undo` and `Redo`.
+  The clear-selection intent becomes `Escape`, which clears a pending window or locked fields as well.
+  Any other intent is returned to the caller and run with the shell's `cx.invoke`.
+- Dynamic input. Edits become `Field`, Tab becomes `Tab`, Enter becomes an empty `Submit`. An unlocked
+  field shows no text, so typed characters append to an empty field; a locked field shows the text typed.
+- Output. The prompt, options, history, the rubber line or window, the snap marker for the kinds the UI
+  kit draws, the dynamic input fields and the selection. A pending window or locked fields count as a
+  selection to clear. History lines are localized: a command that ran, a cancelled one, undo and redo.
+- Document changes outside the controller. At each event the adapter compares the document revision with
+  the one it last saw; a change made elsewhere (a menu command, a file operation) cancels the active
+  command and drops the window and the locks.
+- Errors. A hover error is not kept. A click or dynamic error is kept until the next line action that has
+  no error of its own and is reported there once. A line action reports its own error first, then a
+  failed invocation, then the kept error. Error codes, categories, arguments and details are carried over.
+
+Known gaps of this glue:
+
+- The commands the controller runs (a typed or picked `LINE`, for instance) commit to the tab's document
+  directly, not through `Application::invoke`. Their read-only protection is the permission handover
+  above, not the application's check, so the handover depends on the foundation change.
+- The shell calls `output()` without an event, but the adapter detects an outside change only at the next
+  event, so a change made elsewhere shows at the next pointer or line action.
+- Tracking paths are not drawn, and the option bar has no parameter controls.
+- The history labels of the command and cancel lines use the command identifier as their argument.
+  Adapter messages are localized in en-US and tr-TR; the rest of the draftbuilder messages are en-US only.
 
 **Not verified.** No window was run: the rendering, the pointer events, the picking on the GPU and
 the layout of the panels are unverified. The headless tests (`tests/interaction.rs`) drive the
-controller with event sequences on a metric drawing and check the outputs and the drawing.
+controller with event sequences on a metric drawing and check the outputs and the drawing. The adapter's unit
+tests (`apps/draftbuilder/src/interaction.rs`) drive its pointer, line and dynamic methods on a document
+without a display; the shell's routing of the trait methods is not run by any test.
 
 ## Testing strategy
 

@@ -10,11 +10,13 @@
 
 mod common;
 
+use arc_command::Permission;
 use arc_draft::snap::{ConstraintSource, SnapKind};
 use draftbuilder_commands::interaction::{
-    BandMode, Controller, CrossingPicker, DynamicMode, Event, Outputs,
+    BandMode, Controller, CrossingPicker, DynamicMode, Event, LineRole, Outputs,
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 
 use common::{Env, lines};
 
@@ -396,4 +398,67 @@ fn hovering_an_endpoint_acquires_it_and_a_tracking_path_runs_from_it() {
     assert!(near(cursor.point, [5.0, 0.0]), "{:?}", cursor.point);
     assert!(!out.tracking.is_empty());
     assert!(near(out.tracking[0].origin, [10.0, 0.0]));
+}
+
+#[test]
+fn the_line_state_and_refresh_report_the_active_command() {
+    let (env, mut c) = setup();
+    assert!(c.active_prompt().is_none());
+    assert!(!c.repeatable());
+    submit(&env, &mut c, "LINE");
+    assert!(c.active_prompt().is_some());
+    assert_eq!(c.answers(), 0);
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 10.0, 0.0);
+    assert_eq!(c.answers(), 2);
+    submit(&env, &mut c, "");
+    assert!(c.active_prompt().is_none());
+    assert_eq!(c.answers(), 0);
+    assert!(c.repeatable());
+    let out = c.refresh(&env.document);
+    assert!(out.prompt.is_none());
+    assert_eq!(segments(&env).len(), 1);
+}
+
+#[test]
+fn a_session_without_edit_cannot_draw_a_line_or_step_the_history() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 10.0, 0.0);
+    submit(&env, &mut c, "");
+    assert_eq!(segments(&env).len(), 1);
+
+    let read: BTreeSet<Permission> = [Permission::Read].into_iter().collect();
+    c.set_permissions(&read);
+    let mut codes = Vec::new();
+    codes.extend(errors_of(&submit(&env, &mut c, "LINE")));
+    codes.extend(errors_of(&click(&env, &mut c, 20.0, 0.0)));
+    codes.extend(errors_of(&click(&env, &mut c, 30.0, 0.0)));
+    codes.extend(errors_of(&submit(&env, &mut c, "")));
+    assert!(!codes.is_empty(), "a read-only session must be refused");
+    assert_eq!(segments(&env).len(), 1, "the refused line wrote nothing");
+
+    let undo = send(&env, &mut c, Event::Undo);
+    assert!(!errors_of(&undo).is_empty(), "undo needs Edit");
+    let redo = send(&env, &mut c, Event::Redo);
+    assert!(!errors_of(&redo).is_empty(), "redo needs Edit");
+    assert_eq!(segments(&env).len(), 1);
+}
+
+#[test]
+fn redo_restores_the_line_that_undo_removed() {
+    let (env, mut c) = setup();
+    submit(&env, &mut c, "LINE");
+    click(&env, &mut c, 0.0, 0.0);
+    click(&env, &mut c, 10.0, 0.0);
+    submit(&env, &mut c, "");
+    let out = send(&env, &mut c, Event::Undo);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(segments(&env).is_empty());
+
+    let out = send(&env, &mut c, Event::Redo);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(segments(&env), vec![([0.0, 0.0], [10.0, 0.0])]);
+    assert_eq!(out.history.last().map(|l| l.role), Some(LineRole::Redo));
 }

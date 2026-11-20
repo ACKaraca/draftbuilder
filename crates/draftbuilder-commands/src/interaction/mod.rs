@@ -24,6 +24,7 @@
 //!   that the second click finishes by drag direction.
 //! - [`Event::Option`]: activates a keyword option of the active prompt.
 //! - [`Event::Field`] and [`Event::Tab`]: the dynamic input fields.
+//! - [`Event::Redo`]: steps the document forward (a waiting command is cancelled first).
 //! - [`Event::Undo`]: steps back one prompt answer of the active command, else steps the document's
 //!   history.
 //!
@@ -56,6 +57,13 @@ pub enum Expect {
     Text,
     /// A distance, angle, number or expression.
     Value,
+}
+
+/// The meters that one unit of the document's model space measures. The controller's events and
+/// outputs are in meters; a host converts drawing units with this value.
+#[must_use]
+pub fn meters_per_unit(snapshot: &Snapshot) -> f64 {
+    crate::draw::create::meters_per_unit(snapshot)
 }
 
 /// The most history lines kept; older lines are dropped.
@@ -100,6 +108,8 @@ pub enum Event {
     Tab,
     /// Undo: one prompt answer back in the active command, else one step of the document history.
     Undo,
+    /// Redo: one step of the document history forward; a waiting command is cancelled first.
+    Redo,
 }
 
 /// The host's object pick: the object under a point, in drawing units, with an aperture (the
@@ -137,6 +147,10 @@ pub enum LineRole {
     Command,
     /// A command that was cancelled; the text is its identifier.
     Cancelled,
+    /// An undo step; the text is the identifier of the command it reversed, or empty.
+    Undo,
+    /// A redo step; the text is the identifier of the command it restored, or empty.
+    Redo,
 }
 
 /// One line of the command history.
@@ -262,10 +276,14 @@ pub struct CursorOut {
 pub struct ErrorOut {
     /// The error code.
     pub code: &'static str,
+    /// The category of the error.
+    pub category: arc_base::Category,
     /// The message identifier of the error.
     pub message_id: &'static str,
-    /// The details by name, as text.
-    pub details: Vec<(String, String)>,
+    /// The arguments of the message by name.
+    pub arguments: Vec<(&'static str, arc_base::error::Value)>,
+    /// The details by name.
+    pub details: Vec<(&'static str, arc_base::error::Value)>,
 }
 
 /// Everything a window renders after an event.

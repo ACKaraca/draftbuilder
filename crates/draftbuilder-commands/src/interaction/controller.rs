@@ -1,7 +1,7 @@
 //! The controller: owns the command line of a document and the state of the pointer, selection
 //! and dynamic input, and turns each [`Event`] into the next [`Outputs`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arc_base::{Error, ObjectId, Result};
@@ -94,6 +94,54 @@ impl Controller {
         self.resolver.builds()
     }
 
+    /// The active command's prompt, when a command waits.
+    #[must_use]
+    pub fn active_prompt(&self) -> Option<&arc_command::prompt::Prompt> {
+        self.line.active().and_then(|s| s.prompt())
+    }
+
+    /// The answers the active command has collected so far (zero without a command).
+    #[must_use]
+    pub fn answers(&self) -> usize {
+        self.line.active().map_or(0, |s| s.answers().len())
+    }
+
+    /// Whether an empty line can repeat a completed command.
+    #[must_use]
+    pub fn repeatable(&self) -> bool {
+        self.line.last().is_some()
+    }
+
+    /// What the window shows for `document` now, without an event: used after the host changed
+    /// the document itself (a redo, for instance).
+    pub fn refresh(&mut self, document: &Document) -> Outputs {
+        self.outputs(document, Vec::new())
+    }
+
+    /// The permissions the controller's commands and history steps run with. The host sets them
+    /// before each event from the session of the tab; a command or a step that needs `Edit` is
+    /// refused without it.
+    pub fn set_permissions(&mut self, permissions: &BTreeSet<Permission>) {
+        self.session.permissions.clone_from(permissions);
+    }
+
+    /// Whether the controller holds state a clear (Escape without a command) removes: a pending
+    /// window or a locked dynamic field.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        self.window.is_some() || self.fields.any_locked()
+    }
+
+    /// The window's state for `document` after the document changed outside the controller (a
+    /// menu command, a file operation): an active command is cancelled, the window and the locks
+    /// are dropped, and what the window shows is returned.
+    pub fn external_change(&mut self, document: &Document) -> Outputs {
+        let _ = self.line.cancel();
+        self.window = None;
+        self.command_ended();
+        self.outputs(document, Vec::new())
+    }
+
     /// Applies one event to `document` and returns what the window shows afterwards.
     pub fn handle(
         &mut self,
@@ -115,6 +163,7 @@ impl Controller {
             Event::Field { index, text } => self.fields.set(index, text),
             Event::Tab => self.fields.toggle(),
             Event::Undo => self.undo(document, &mut errors),
+            Event::Redo => self.redo(document, &mut errors),
         }
         self.outputs(document, errors)
     }
@@ -260,11 +309,40 @@ impl Controller {
             self.settle(result, errors);
             return;
         }
-        match history::step(document, &self.session, Direction::Undo) {
-            Ok(stepped) => {
+        self.step_history(document, Direction::Undo, errors);
+    }
+
+    /// Redo steps the document history forward. A waiting command is cancelled first, since a
+    /// redo has no prompt answer to step back from.
+    fn redo(&mut self, document: &Document, errors: &mut Vec<ErrorOut>) {
+        if let Some(name) = self.line.active().map(|s| s.command().id().to_owned()) {
+            let cancelled = self.line.cancel();
+            if matches!(cancelled, Submitted::Cancelled) {
                 self.history.push(HistoryLine {
-                    role: LineRole::Command,
-                    text: stepped.command.unwrap_or_else(|| "history.undo".to_owned()),
+                    role: LineRole::Cancelled,
+                    text: name,
+                });
+            }
+            self.command_ended();
+        }
+        self.step_history(document, Direction::Redo, errors);
+    }
+
+    fn step_history(
+        &mut self,
+        document: &Document,
+        direction: Direction,
+        errors: &mut Vec<ErrorOut>,
+    ) {
+        match history::step(document, &self.session, direction) {
+            Ok(stepped) => {
+                let role = match direction {
+                    Direction::Undo => LineRole::Undo,
+                    Direction::Redo => LineRole::Redo,
+                };
+                self.history.push(HistoryLine {
+                    role,
+                    text: stepped.command.unwrap_or_default(),
                 });
                 self.command_ended();
             }
@@ -506,24 +584,22 @@ fn expect_of(accept: &Accept) -> Expect {
     }
 }
 
-/// The error as the window shows it.
+/// The error as the window shows it: its code, category, message and its arguments and details.
 fn error_out(error: &Error) -> ErrorOut {
     ErrorOut {
         code: error.code(),
+        category: error.category(),
         message_id: error.message_id(),
+        arguments: error
+            .arguments()
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect(),
         details: error
             .details()
             .iter()
-            .map(|(name, value)| ((*name).to_owned(), detail_text(value)))
+            .map(|(k, v)| (*k, v.clone()))
             .collect(),
-    }
-}
-
-fn detail_text(value: &arc_base::error::Value) -> String {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(text)) => text,
-        Ok(other) => other.to_string(),
-        Err(_) => String::new(),
     }
 }
 

@@ -18,6 +18,8 @@ use arc_gpu::draft::{DraftOptions, extract_entity};
 use arc_gpu::extract;
 use arc_ui::{Axis, Binding, Dock, DockLayout};
 
+pub mod interaction;
+
 /// The viewport panel.
 pub const VIEWPORT: &str = "draftbuilder.viewport";
 /// The property grid.
@@ -58,6 +60,8 @@ pub fn product(clock: Arc<dyn Clock>, owner: LockOwner) -> Result<Product> {
         .with_commands(draftbuilder_commands::registry()?);
     arc_app::commands::register(builder.commands_mut())?;
     builder.last_objects(draftbuilder_commands::last_objects);
+    let messages = localizer(&os_locales()).ok().map(Arc::new);
+    builder.interaction(move || Box::new(interaction::DrawingInteraction::new(messages.clone())));
     shell::prefs::register_settings(&mut builder)?;
     builder.package_extension("draftb");
     builder.file_type(FileType {
@@ -178,6 +182,15 @@ pub fn config(seed: u64) -> Result<ShellConfig> {
     })
 }
 
+/// The languages the operating system asks for, in the order the environment names them.
+#[must_use]
+pub fn os_locales() -> Vec<String> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|n| std::env::var(n).ok())
+        .collect()
+}
+
 /// The message catalogs the application formats with, for the requested languages: the shell's
 /// ([`arc_app::locale::shell_catalogs`]) with the application's and the crates' English
 /// messages appended.
@@ -193,6 +206,10 @@ pub fn localizer(requested: &[String]) -> Result<arc_app::locale::Localizer> {
     ]
     .concat();
     catalogs.append("en-US", &english)?;
+    catalogs.append(
+        "tr-TR",
+        include_str!("../../../locales/tr-TR/draftbuilder.ftl"),
+    )?;
     arc_app::locale::Localizer::new(catalogs, requested)
 }
 
