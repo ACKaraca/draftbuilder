@@ -326,14 +326,30 @@ fn objects_created_after_the_open_get_recorded_handles_that_later_saves_keep() {
         let drawing = parse(&std::fs::read(env.dir.join(name)).unwrap());
         assert!(handles(&drawing).contains(&handle.value()), "{name}");
     }
-    // Undoing the save forgets the record, but not that the handle was written: the next save
-    // does not give it to another object.
-    assert!(env.document.undo().wait().unwrap().value);
+    // The saves recorded handles but are no undo steps: the undo takes the line, the last edit,
+    // and the record stays; the redo brings the line back, bound to the same handle.
     assert!(
-        Database::of(&env.document.snapshot())
-            .handle_of(line_id)
-            .is_none()
+        env.document
+            .undo_step_list(100)
+            .iter()
+            .all(|step| !step.command.contains("save"))
     );
+    assert!(env.document.undo().wait().unwrap().value);
+    let undone = env.document.snapshot();
+    assert!(undone.resolve(line_id).is_err());
+    assert!(undone.resolve(layer.parse().unwrap()).is_ok());
+    assert!(env.document.redo().wait().unwrap().value);
+    assert_eq!(
+        Database::of(&env.document.snapshot()).handle_of(line_id),
+        Some(handle)
+    );
+    let third = env.run(
+        "draftbuilder.drawing.save_dxf",
+        json!({"path": env.path("three.dxf")}),
+    );
+    assert_eq!(third["handles_recorded"], 0);
+    let drawing = parse(&std::fs::read(env.dir.join("three.dxf")).unwrap());
+    assert!(handles(&drawing).contains(&handle.value()));
 }
 
 #[test]

@@ -1,20 +1,23 @@
 //! `draftbuilder.drawing.save` and `draftbuilder.drawing.save_dxf`: writes the drawing database as
 //! a DXF file.
 //!
-//! The command is undoable because it records, in its transaction, the handles the export
-//! assigned to objects the file did not have. A save that assigns none changes nothing and
-//! leaves no step in the history. The file is written to a temporary file beside the target,
-//! which replaces the target only when it is complete, so a failed save never leaves a truncated
-//! drawing. DWG writing is not available yet: a DWG target is refused.
+//! The handles the export assigned to objects the file did not have are recorded in the document
+//! as bookkeeping (`Context::commit_silently`) before the file is written (`Context::after_commit`
+//! writes it once the record is committed): a file never carries a handle the document does not
+//! know, and a failed write only burns handles. The record is journaled, but neither an undo step
+//! nor a change to the redo stack, so a save is never undone and never shows in the step list. A
+//! recorded handle stays with its object for the life of the document, also while undo removes the
+//! object and redo brings it back. A save that assigns none changes nothing. The file is written
+//! to a temporary file beside the target, which replaces the target only when it is complete, so
+//! a failed save never leaves a truncated drawing. DWG writing is not available yet: a DWG target
+//! is refused.
 
-use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use arc_base::{Error, Result};
-use arc_command::{CommandSpec, Context, Permission, Registry, UndoBehavior};
+use arc_command::{CommandSpec, Context, Permission, Registry, Session, UndoBehavior};
 use arc_draft_dxf::commands::DxfVersion;
 use arc_io_dxf::{Progress, WriteOptions};
 use draftbuilder_io::report::merge;
@@ -42,49 +45,6 @@ const SAVE_LABEL: Message = Message {
 const SAVE_DESCRIPTION: Message = Message {
     message_id: "db-cmd-save-drawing-description",
 };
-
-/// How many drawings the process keeps a handle mark for. The least recently used mark goes first.
-const MARKS_CAP: usize = 16;
-
-/// The highest handle each drawing has had written to a file in this process, by its fingerprint.
-///
-/// The mark protects against one case: a save that is undone removes its handles from the document,
-/// so a later object of the same drawing could get a handle that a file of this process already
-/// holds. The mark keeps that handle out of the handles the drawing issues. Other drawings have other
-/// fingerprints and their marks do not affect this drawing's handles.
-static MARKS: Mutex<VecDeque<(String, u64)>> = Mutex::new(VecDeque::new());
-
-/// The marks, behind their lock; a poisoned lock still gives its marks, which are plain data.
-fn marks() -> MutexGuard<'static, VecDeque<(String, u64)>> {
-    MARKS.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The highest handle written to a file for the drawing `key` in this process; 0 when none.
-fn mark_of(key: &str) -> u64 {
-    let mut marks = marks();
-    match marks.iter().position(|(k, _)| k == key) {
-        Some(index) => {
-            let entry = marks.remove(index);
-            let value = entry.as_ref().map_or(0, |(_, value)| *value);
-            if let Some(entry) = entry {
-                marks.push_front(entry);
-            }
-            value
-        }
-        None => 0,
-    }
-}
-
-/// Records that the drawing `key` has had handles up to `top` written, and keeps the table bounded.
-fn raise_mark(key: &str, top: u64) {
-    let mut marks = marks();
-    let value = match marks.iter().position(|(k, _)| k == key) {
-        Some(index) => marks.remove(index).map_or(top, |(_, value)| value.max(top)),
-        None => top,
-    };
-    marks.push_front((key.to_owned(), value));
-    marks.truncate(MARKS_CAP);
-}
 
 /// Parameters of `draftbuilder.drawing.save_dxf`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -160,29 +120,34 @@ fn check_writable_target(path: &Path) -> Result<()> {
     }
 }
 
+/// Refuses a target the write is refused for: outside the write roots, not a regular file, or
+/// read-only.
+fn check_target_writable(session: &Session, path: &Path) -> Result<()> {
+    check_regular_target(path)?;
+    check_writable_target(path)?;
+    session.roots.check_write(path)
+}
+
 /// Writes `bytes` to `path` through a temporary file beside it, then replaces `path` with it.
 ///
 /// The target is checked against the write roots, must be a regular file or absent (a symbolic link
 /// is refused, as it was before: the link itself is never replaced nor followed), and must not be
-/// read-only. The temporary file is created exclusively with `Context::create_new`, under a short name
+/// read-only. The temporary file is created exclusively with `Roots::create_new`, under a short name
 /// with a random part. Its permissions are those of the file it replaces, set on the open handle before
 /// any byte is written, so a private drawing is never readable under the default permissions. It is
-/// written, synced and closed, then `Context::replace_file` renames it over the target. On failure the
+/// written, synced and closed, then `Roots::replace_file` renames it over the target. On failure the
 /// temporary file is removed and `path` keeps what it held.
 ///
 /// The directory is synced after the rename on Unix. The file is in place by then, so a failed sync is
-/// not an error: it is returned as a warning for the result, and the caller still records what the file
-/// holds.
+/// not an error: it is returned as a warning for the result.
 ///
 /// When the command is the native save of the application, `path` is the empty temporary file the
 /// application created beside its target; this writes that file, and the application renames it over the
 /// target. The application does not carry the target's permissions over, so a native save takes the
 /// permissions of its temporary file.
-fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<Vec<String>> {
+fn write_atomic(session: &Session, path: &Path, bytes: &[u8]) -> Result<Vec<String>> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    check_regular_target(path)?;
-    check_writable_target(path)?;
-    ctx.session().roots.check_write(path)?;
+    check_target_writable(session, path)?;
     let name = format!(
         ".draftbuilder-{:x}-{:016x}-{}.tmp",
         std::process::id(),
@@ -191,7 +156,7 @@ fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<Vec<Stri
     );
     let temp_path = path.with_file_name(name);
     let result = (|| {
-        let mut file = ctx.create_new(&temp_path)?;
+        let mut file = session.roots.create_new(&temp_path)?;
         if let Ok(meta) = std::fs::metadata(path) {
             file.set_permissions(meta.permissions())
                 .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
@@ -200,7 +165,7 @@ fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<Vec<Stri
             .and_then(|()| file.sync_all())
             .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
         drop(file);
-        ctx.replace_file(&temp_path, path)
+        session.roots.replace_file(&temp_path, path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp_path);
@@ -318,6 +283,9 @@ fn save(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
 }
 
 fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
+    // A target the write would refuse fails here, before anything is recorded; the write checks
+    // again, since the target can change in between.
+    check_target_writable(ctx.session(), Path::new(&p.path))?;
     let snapshot = ctx.snapshot().clone();
     let space = crate::model_space(&snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
     let database = Database::of(&snapshot);
@@ -325,12 +293,11 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         (Some(f), false) => (f, database.origin() == Some(Origin::Assigned)),
         _ => (fresh_fingerprint(ctx)?, true),
     };
-    let key = fingerprint.to_braced();
     let request = Request {
         fingerprint,
         fingerprint_assigned: assigned,
         version_guid: fresh_fingerprint(ctx)?,
-        floor: database.top().max(mark_of(&key)),
+        floor: database.top(),
     };
     let mut exported = export(&snapshot, space, &request)?;
     // The drawing's settings replace the header values the export wrote under the same names.
@@ -360,20 +327,31 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         &serde_json::to_value(&exported.report)
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
     )?;
-    let warnings = write_atomic(ctx, Path::new(&p.path), &output.bytes)?;
-    // The file is written: record the handles it now holds for objects that had none.
+    // The handles are recorded in the document before the file is written: the invoker commits the
+    // record and only then runs the write, so a file never carries a handle the document does not
+    // know. A write that fails afterwards only burns handles, which are never issued again.
+    let path = Path::new(&p.path);
     let new: Vec<_> = exported
         .handles
         .iter()
         .filter(|(id, _)| database.handle_of(*id).is_none())
         .copied()
         .collect();
-    if let Some(top) = exported.handles.iter().map(|(_, h)| h.value()).max() {
-        raise_mark(&key, top);
-    }
-    if !new.is_empty() && !p.independent_copy {
-        database::record(ctx.txn()?, &new)?;
-    }
+    let recorded = if !new.is_empty() && !p.independent_copy {
+        ctx.commit_silently()?;
+        database::record(ctx.txn()?, &new)?
+    } else {
+        0
+    };
+    let (target, bytes) = (path.to_owned(), output.bytes);
+    let written = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    ctx.after_commit(move |session, value| {
+        let warnings = write_atomic(session, &target, &bytes)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("warnings".to_owned(), serde_json::json!(warnings));
+        }
+        Ok(())
+    })?;
     let mut report = exported.report;
     merge(&mut report, &output.report);
     let arrays_as_references = report_arrays(
@@ -381,24 +359,20 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
     );
     Ok(SaveResult {
-        bytes: u64::try_from(output.bytes.len()).unwrap_or(u64::MAX),
+        bytes: written,
         entities: exported.entities,
         handles_kept: (exported.handles.len() - new.len()) as u64,
-        handles_recorded: if p.independent_copy {
-            0
-        } else {
-            new.len() as u64
-        },
+        handles_recorded: recorded as u64,
         fingerprint: fingerprint.to_braced(),
         arrays_as_references,
-        warnings,
+        warnings: Vec::new(),
         report: serde_json::to_value(&report)
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
     })
 }
 
 /// Registers `draftbuilder.drawing.save_dxf` and `draftbuilder.drawing.save` (permission classes
-/// `read`, `edit` and `file_write`, undoable).
+/// `read`, `edit` and `file_write`; the recorded handles commit silently).
 ///
 /// # Errors
 /// `cmd.duplicate` when an identifier is already registered.

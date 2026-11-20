@@ -223,22 +223,28 @@ pub fn raise_top(txn: &mut Txn, top: u64) -> Result<()> {
     )
 }
 
-/// Records `pairs` (object, handle) as bindings in `txn` and raises the high-water mark to the
-/// highest handle. An object that has a binding already keeps it. Used for the handles an
-/// export assigned to objects the file did not have.
+/// Records `pairs` (object, handle) as bindings in `txn` and returns how many it recorded. An object that has a binding keeps it,
+/// and a handle at or below the high-water mark is never bound again, so a handle once issued
+/// stays with its object. Used for the handles an export assigned to objects the file did not
+/// have.
+///
+/// It only adds rows (each new binding is a row of its own, which also raises the high-water
+/// mark, as the mark is the highest handle of any row), never rewrites one. A transaction that
+/// commits as bookkeeping therefore touches no row an earlier undo step wrote, and that step
+/// still undoes. The rows of an object that undo removes stay, and bind it again when redo
+/// brings it back with the same identifier.
 ///
 /// # Errors
 /// The transaction's errors.
-pub fn record(txn: &mut Txn, pairs: &[(ObjectId, Handle)]) -> Result<()> {
+pub fn record(txn: &mut Txn, pairs: &[(ObjectId, Handle)]) -> Result<usize> {
     let db = Database::of(txn.snapshot());
     let mut map = SourceMap::of(txn.snapshot());
+    let mut recorded = 0;
     for (object, handle) in pairs {
-        if db.handle_of(*object).is_none() && db.object_of(*handle).is_none() {
+        if handle.value() > db.top() && db.handle_of(*object).is_none() {
             map.bind(txn, FORMAT, SOURCE_DOCUMENT, &handle.to_hex(), *object)?;
+            recorded += 1;
         }
     }
-    match pairs.iter().map(|(_, h)| h.value()).max() {
-        Some(top) => raise_top(txn, top),
-        None => Ok(()),
-    }
+    Ok(recorded)
 }
