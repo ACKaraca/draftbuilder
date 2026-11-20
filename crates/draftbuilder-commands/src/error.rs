@@ -105,6 +105,33 @@ pub mod codes {
         category: Category::Conflict,
         message_id: "db-cmd-layer-in-use",
     };
+    /// Three points of an arc or circle lie on one line, or two of them coincide.
+    pub const POINTS_COLLINEAR: ErrorCode = ErrorCode {
+        code: "db.cmd.points_collinear",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-points-collinear",
+    };
+    /// A construction has no solution for the values given, such as a tangent circle that
+    /// cannot reach both objects with the radius, or an arc whose chord is longer than its
+    /// diameter.
+    pub const NO_SOLUTION: ErrorCode = ErrorCode {
+        code: "db.cmd.no_solution",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-no-solution",
+    };
+    /// An option undoes a segment, but no segment is drawn yet.
+    pub const NOTHING_TO_UNDO: ErrorCode = ErrorCode {
+        code: "db.cmd.nothing_to_undo",
+        category: Category::Conflict,
+        message_id: "db-cmd-nothing-to-undo",
+    };
+    /// A tangent object is not a line, segment or circle, the objects the tangent constructions
+    /// accept.
+    pub const TANGENT_OBJECT: ErrorCode = ErrorCode {
+        code: "db.cmd.tangent_object",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-tangent-object",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         DRAWING_NOT_EMPTY,
@@ -123,6 +150,10 @@ pub mod codes {
         NAME_TAKEN,
         LAYER_SPECIAL,
         LAYER_IN_USE,
+        POINTS_COLLINEAR,
+        NO_SOLUTION,
+        NOTHING_TO_UNDO,
+        TANGENT_OBJECT,
     ];
 }
 

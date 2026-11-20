@@ -257,6 +257,51 @@ is refused.
 
 Not implemented yet in selection and layers: picking, grips, highlight and the selection prompt machine (the prompt keywords `previous`, `last` and the mode switches); implicit windowing; groups; selection isolation and hiding; selection by name of a saved filter; properties by size; the previous set across commands and the noun-verb use of a selection, which need session selection state in the foundation; layer states; layer isolation; the current layer; layer walk; viewport layer overrides; the panels. The foundation (pinned `arc-core`) lacks: no session selection keyword in object parameters or prompts (`arc-command`: `IdParam`, the selection accept of `prompt.rs`); no selection record for a transaction without operations (`arc-command` protocol `run.rs` and `arc-doc` `commit.rs`); `arc-command` caps a session selection at 10,000 identifiers (`protocol/events.rs`, `MAX_SELECTED`); the commit name check compares bytes, not case (`arc-draft` `validate.rs`; the product checks case-insensitively on create and rename); no creation order for `last` (the `arc-doc` handle orders storage slots, `store.rs`); outline text exposes glyph positions only (`arc-draft` `display.rs`, `Shape::Glyphs`); the layer lock check is not public (`arc-draft` `lock.rs`), so the product repeats its rule for the entities it writes directly.
 
+### Drawing commands (Phase-1 rows of DB-DRAW)
+
+The drawing commands are the `draftbuilder.draw.*` family in `draftbuilder-commands` (`draw`, one
+module per family, pure constructions in `draw/geometry.rs`, shared creation in `draw/create.rs`).
+Each command has typed parameters for the complete form and a prompt machine for the typed form.
+Each command ends in one transaction: a command that creates several entities (LINE, PLINE with
+its segments, RECTANG with fillet) is one undo step. Points typed or picked in a prompt go through
+the foundation's point entry, so `x,y`, `@x,y`, `@d<a`, `d<a`, the direction lock `<a` and direct
+distances after a pointer direction are read by the foundation. Prompt defaults are shown in angle
+brackets. The prompt form has no preview (the rubber band is not built).
+
+New entities go to the model space on layer `0` with the by-layer appearance defaults of the
+foundation. The drawing's current layer and current properties are not built yet; `Creator::new`
+is the one place that will read them. Coordinates in the typed parameters are numbers in the
+drawing's units (the unit of its model space); a unitless drawing takes meters. Prompt answers are
+converted to the same units. Angles are radians, counterclockwise from the positive x axis; the
+prompt form reads a bare angle with the session's angle context unit (degrees).
+
+| Capability ([rows of 05-draw-2d](../product/capabilities/05-draw-2d.md)) | Command (typed name) | Built | Not built |
+|---|---|---|---|
+| Line | `draftbuilder.draw.line` (`LINE`) | Chain of separate lines; close; undo; finish; typed and prompt forms | Continuation from the end of an arc (the last point, given with `@`, continues from a line) |
+| Construction line | `draftbuilder.draw.xline` (`XLINE`) | Through two points; horizontal; vertical; angle through a point; repeats until finish; undo | Bisector and offset options (they need a picked line or angle) |
+| Ray | `draftbuilder.draw.ray` (`RAY`) | One ray per through point; undo | None |
+| Polyline | `draftbuilder.draw.polyline` (`PLINE`) | Line and arc segments; per-segment start and end widths; undo; close with a straight segment; arc methods second point, center, included angle, radius, direction; tangent continuation | Length continuation; half-width option; closing with an arc; the typed form takes bulges, not arc parameters |
+| Rectangle | `draftbuilder.draw.rectangle` (`RECTANG`) | Corners; rotation and corner; dimensions and area with the side point choosing the quadrant; typed width and fillet radius (the foundation's corner fillet) | Chamfers; elevation and thickness (default 0); width and fillet in the prompt form |
+| Polygon | `draftbuilder.draw.polygon` (`POLYGON`) | 3 to 1024 sides, inscribed, circumscribed, by an edge | None |
+| 3D polyline | 3D polyline (`3DPOLY`) | Not built | No 3D polyline entity in `arc-draft` |
+| Legacy polylines | Legacy polylines | Read and written through DXF import, as lightweight polylines | Read-back as legacy objects; the conversion command |
+| Circle | `draftbuilder.draw.circle` (`CIRCLE`) | Center and radius; center and diameter; two points; three points; tangent to two objects with a radius (typed: lines, segments and circles, with the object identifier and a pick point) | Tangent to three objects; tangent to arcs and polylines; the pick in the prompt form |
+| Arc | `draftbuilder.draw.arc` (`ARC`) | Three points; start, center and end; start, center and angle; start, end and radius; start, end and angle | Continuation from the last line or arc; chord length; the typed form and prompt form of the continuation |
+| Ellipse | `draftbuilder.draw.ellipse` (`ELLIPSE`) | Axis endpoints and other semi-axis; center and semi-axis; rotation about an axis (minor semi-axis is the radius times the cosine of the rotation); elliptical arcs by start and end parameters | Isometric circles; rotation in the axis form |
+| Donut | `draftbuilder.draw.donut` (`DONUT`) | Rings at repeated centers; inside diameter zero gives a disc | Fill display (a setting) |
+| Spline | `draftbuilder.draw.spline` (`SPLINE`) | Fit points (degree 3 in the prompt form); control vertices with a degree (typed) | Fit tolerance; end tangents; converting spline-fit polylines; control vertices in the prompt form |
+| Helix | Helix (`HELIX`) | Not built | No helix entity or sweep path in `arc-draft` |
+| Point | `draftbuilder.draw.point` (`POINT`) | Point entities at positions; repeats until finish | The drawing-wide point style (a setting) |
+| Divide, measure | Divide, measure | Not built | Need a picked curve and a block choice; the interval walk is not wired |
+| Sketch | Sketch | Not built | Needs the pointer's free movement |
+| Region, boundary | Region, boundary | Not built | Need selected loops or a picked point and the island detection, which are not wired into a command |
+| Wipeout | Wipeout | Not built | The foundation has a wipeout creation function; not wired into this family |
+| Revision cloud | Revision cloud | Not built | No revision-cloud construction in the foundation |
+| 2D solid and trace; fill display | 2D solid and trace; fill display | Not built | No trace or solid entity in the type set; fill display is a setting |
+| Multiline and multiline styles | Multiline and multiline styles | Not built | No multiline types in `arc-draft` |
+
+The Phase-2 and Phase-3 rows of the capability document are not part of this family.
+
 Not implemented yet: a read-only open and an initial view; DWG writing and save as DWG; DXF writing
 for R12 to R14; the DWG fingerprint and handle seed, which `arc-io-dwg` does not carry (a DWG drawing
 gets an assigned fingerprint, and its handle mark is the highest bound handle, not the file's seed);
