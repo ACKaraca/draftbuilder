@@ -287,6 +287,7 @@ pub(crate) fn open_drawing(
         None => (fresh_fingerprint(ctx)?, Origin::Assigned),
     };
     database::set_fingerprint(ctx.txn()?, fingerprint, origin)?;
+    crate::settings::header::load_header(ctx, &output.drawing)?;
     Ok(OpenResult {
         space: IdParam(space),
         format: format.name().to_owned(),

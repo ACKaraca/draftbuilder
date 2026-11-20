@@ -407,6 +407,12 @@ fn trim_quick_mode_leaves_out_objects_on_a_frozen_layer() {
     setup(&mut env);
     let target = line(&mut env, [0.0, 0.0], [10.0, 0.0]);
     let hidden = line(&mut env, [4.0, -1.0], [4.0, 1.0]);
+    // The current layer cannot be frozen, so the hidden edge gets a layer of its own.
+    env.run("draftbuilder.layer.create", json!({"name": "Hidden"}));
+    env.run(
+        "draftbuilder.layer.change",
+        json!({"objects": [hidden.clone()], "layer": "Hidden"}),
+    );
     env.run("draftbuilder.layer.freeze", json!({"objects": [hidden]}));
     let error = env
         .invoke(

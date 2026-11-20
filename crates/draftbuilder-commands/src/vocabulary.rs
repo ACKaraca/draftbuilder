@@ -362,6 +362,60 @@ pub const NAMES: &[Name] = &[
         typed: Some("MATCHPROP"),
         aliases: &[],
     },
+    Name {
+        id: "draftbuilder.settings.setvar",
+        area: Area::Settings,
+        typed: Some("SETVAR"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.settings.current_layer",
+        area: Area::Settings,
+        typed: Some("CLAYER"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.precision.osnap",
+        area: Area::Precision,
+        typed: Some("OSNAP"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.precision.ucs",
+        area: Area::Precision,
+        typed: Some("UCS"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.inquiry.distance",
+        area: Area::Precision,
+        typed: Some("DIST"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.inquiry.id",
+        area: Area::Precision,
+        typed: Some("ID"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.inquiry.area",
+        area: Area::Precision,
+        typed: Some("AREA"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.inquiry.list",
+        area: Area::Precision,
+        typed: Some("LIST"),
+        aliases: &[],
+    },
+    Name {
+        id: "draftbuilder.inquiry.mass",
+        area: Area::Precision,
+        typed: Some("MASSPROP"),
+        aliases: &[],
+    },
 ];
 
 /// Applies the rows of `area` to `registry`: each typed name and alias becomes a user alias of

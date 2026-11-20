@@ -2,9 +2,9 @@
 //! coordinates map between the prompts and the drawing, the creation of entities in the
 //! transaction of a command, and the prompt machine adapter.
 //!
-//! New entities go to the model space, on layer `0` when the drawing has it, with the by-layer
-//! appearance of the foundation's defaults. Taking the current layer and the current properties
-//! of the drawing is not built yet: [`Creator::new`] is the one place that chooses them.
+//! New entities go to the model space, on the current layer and with the current color, linetype,
+//! lineweight, transparency and linetype scale of the drawing settings ([`Creator::new`] reads
+//! them, in `settings::entity_fields`).
 //!
 //! Coordinates: the typed parameters of the commands are numbers in the drawing's units, the unit
 //! its model space declares (`millimeter`, ...) and in meters for an unitless drawing. The prompts
@@ -26,7 +26,6 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::error::{Message, codes};
-use crate::select::candidates::default_layer;
 
 /// The spacing of draw-order keys of entities created one after another: the spacing the
 /// foundation leaves beyond the end of a container.
@@ -73,7 +72,7 @@ pub(crate) fn drawing_point(snapshot: &Snapshot, point: Point) -> Point2 {
 /// the draw order of each new entity above the ones before it.
 pub(crate) struct Creator {
     space: ObjectId,
-    layer: Option<ObjectId>,
+    appearance: Vec<(usize, Value)>,
     next_order: i64,
     ids: Vec<IdParam>,
 }
@@ -97,7 +96,7 @@ impl Creator {
         };
         Ok(Self {
             space,
-            layer: default_layer(snapshot),
+            appearance: crate::settings::entity_fields(snapshot),
             next_order,
             ids: Vec::new(),
         })
@@ -116,7 +115,9 @@ impl Creator {
         fields: Vec<(usize, Value)>,
     ) -> Result<()> {
         let mut values = types::defaults(ctx.snapshot().registry(), key);
-        set(&mut values, entity::LAYER, self.layer.map(Value::Reference));
+        for (index, value) in &self.appearance {
+            set(&mut values, *index, Some(value.clone()));
+        }
         for (index, value) in fields {
             set(&mut values, index, Some(value));
         }

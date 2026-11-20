@@ -369,6 +369,11 @@ fn set_flag(
     value: bool,
 ) -> Result<Layers> {
     let layers = layers_of(ctx.snapshot(), objects)?;
+    if index == layer::FROZEN && value {
+        for id in &layers {
+            crate::settings::refuse_current(ctx.snapshot(), *id)?;
+        }
+    }
     let txn = ctx.txn()?;
     for id in &layers {
         txn.modify(
@@ -416,6 +421,11 @@ fn modify(ctx: &mut Context<'_>, p: ModifyLayers) -> Result<Layers> {
                 .with_detail("id", id.to_string()));
         }
         targets.push(*id);
+    }
+    if p.frozen == Some(true) {
+        for id in &targets {
+            crate::settings::refuse_current(ctx.snapshot(), *id)?;
+        }
     }
     let txn = ctx.txn()?;
     for id in &targets {
@@ -693,6 +703,7 @@ fn delete(ctx: &mut Context<'_>, p: LayerList) -> Result<Layers> {
     let none = BTreeSet::new();
     for id in &targets {
         refuse_special(snapshot, *id)?;
+        crate::settings::refuse_current(snapshot, *id)?;
         refuse_preserved(snapshot, &preserved, *id)?;
         refuse_other_referrers(snapshot, *id, &none)?;
     }
@@ -712,6 +723,7 @@ fn delete_with_contents(ctx: &mut Context<'_>, p: LayerList) -> Result<Removed> 
     let mut removed = BTreeSet::new();
     for id in &targets {
         refuse_special(snapshot, *id)?;
+        crate::settings::refuse_current(snapshot, *id)?;
         refuse_preserved(snapshot, &preserved, *id)?;
         let found = contents(snapshot, *id);
         if !found.is_empty() {
@@ -747,6 +759,7 @@ fn merge(ctx: &mut Context<'_>, p: MergeLayers) -> Result<Layers> {
     let mut moved = BTreeSet::new();
     for source in &sources {
         refuse_special(snapshot, *source)?;
+        crate::settings::refuse_current(snapshot, *source)?;
         refuse_preserved(snapshot, &preserved, *source)?;
         let found = contents(snapshot, *source);
         if !found.is_empty() {

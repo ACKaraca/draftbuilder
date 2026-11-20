@@ -273,7 +273,12 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         version_guid: fresh_fingerprint(ctx)?,
         floor: database.top().max(WRITTEN.load(Ordering::Relaxed)),
     };
-    let exported = export(&snapshot, space, &request)?;
+    let mut exported = export(&snapshot, space, &request)?;
+    // The drawing's settings replace the header values the export wrote under the same names.
+    for variable in crate::settings::header::header_values(&snapshot) {
+        exported.drawing.header.retain(|h| h.name != variable.name);
+        exported.drawing.header.push(variable);
+    }
     ctx.progress(0.5, SAVE_PROGRESS.message_id);
     let mut options = WriteOptions::for_version(p.version.version());
     options.binary = p.binary;

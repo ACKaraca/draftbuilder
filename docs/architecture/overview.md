@@ -268,9 +268,8 @@ the foundation's point entry, so `x,y`, `@x,y`, `@d<a`, `d<a`, the direction loc
 distances after a pointer direction are read by the foundation. Prompt defaults are shown in angle
 brackets. The prompt form has no preview (the rubber band is not built).
 
-New entities go to the model space on layer `0` with the by-layer appearance defaults of the
-foundation. The drawing's current layer and current properties are not built yet; `Creator::new`
-is the one place that will read them. Coordinates in the typed parameters are numbers in the
+New entities go to the model space on the current layer, with the current color, linetype, lineweight,
+transparency and linetype scale of the drawing settings; `Creator::new` is the one place that reads them. Coordinates in the typed parameters are numbers in the
 drawing's units (the unit of its model space); a unitless drawing takes meters. Prompt answers are
 converted to the same units. Angles are radians, counterclockwise from the positive x axis; the
 prompt form reads a bare angle with the session's angle context unit (degrees).
@@ -394,6 +393,30 @@ The foundation gaps the family meets: the DXF export has no array mapping (`arc-
 is not callable from a product command, so the product's erase applies the transaction's delete rules itself and
 refuses dependents that are not erased; the foundation's transform is a uniform scale and a mirror, so a
 block reference with a non-uniform scale cannot be exploded.
+### Settings, precision and inquiry
+
+The settings table (`draftbuilder-commands`, `settings`) lists each setting with its product name,
+its compatibility name, type and range, scope, default, DXF header variable and catalog description.
+Drawing-scoped values are rows of the document, so a change is one undoable transaction and the
+package keeps them. Session-scoped values live in memory for the process. Reading a DXF header fills
+the drawing-scoped values on open (`settings::header::load_header`); `settings::header::header_values`
+returns the header variables a save writes. The current layer follows a rename, and the layer
+commands refuse to delete, merge or freeze it. Profiles are not built: the settings store of the
+application shell is not a dependency of this crate.
+
+The precision area (`draftbuilder-commands`, `precision`) resolves a pick: `precision::resolve::resolve`
+takes the snapshot, the model space, the cursor and the settings, applies the running object snap set
+or the one-pick override, then tracking, ortho, polar and the snap step, through `arc_draft::snap`.
+The object snap codes, their bits in the running set and the point filter are in `precision::snaps`.
+The inquiry commands report lengths and areas in the drawing length unit and precision, angles in
+decimal degrees, and coordinates in the current user coordinate system. A user coordinate system is
+planar, an origin and an X direction stored as drawing rows; `precision::ucs::plane_transform` gives
+the transform that the session point entry needs for typed coordinates.
+
+Not built: profiles; the header write on save (the save command must add `header_values` to the
+exported drawing); the display formats other than decimal; 3D point filters and coordinate systems;
+the UCS icon, plan view and dynamic UCS; region and mass properties; the feed of the point entry by
+the interactive host; the drawing limits check at point entry.
 
 ## Testing strategy
 
