@@ -7,9 +7,11 @@
 //! which replaces the target only when it is complete, so a failed save never leaves a truncated
 //! drawing. DWG writing is not available yet: a DWG target is refused.
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use arc_base::{Error, Result};
 use arc_command::{CommandSpec, Context, Permission, Registry, UndoBehavior};
@@ -41,10 +43,48 @@ const SAVE_DESCRIPTION: Message = Message {
     message_id: "db-cmd-save-drawing-description",
 };
 
-/// The highest handle any save of this process has written. Undoing a save removes its recorded
-/// handles from the document, but not from this mark, so a handle written to a file is not
-/// issued again to another object in this process.
-static WRITTEN: AtomicU64 = AtomicU64::new(0);
+/// How many drawings the process keeps a handle mark for. The least recently used mark goes first.
+const MARKS_CAP: usize = 16;
+
+/// The highest handle each drawing has had written to a file in this process, by its fingerprint.
+///
+/// The mark protects against one case: a save that is undone removes its handles from the document,
+/// so a later object of the same drawing could get a handle that a file of this process already
+/// holds. The mark keeps that handle out of the handles the drawing issues. Other drawings have other
+/// fingerprints and their marks do not affect this drawing's handles.
+static MARKS: Mutex<VecDeque<(String, u64)>> = Mutex::new(VecDeque::new());
+
+/// The marks, behind their lock; a poisoned lock still gives its marks, which are plain data.
+fn marks() -> MutexGuard<'static, VecDeque<(String, u64)>> {
+    MARKS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The highest handle written to a file for the drawing `key` in this process; 0 when none.
+fn mark_of(key: &str) -> u64 {
+    let mut marks = marks();
+    match marks.iter().position(|(k, _)| k == key) {
+        Some(index) => {
+            let entry = marks.remove(index);
+            let value = entry.as_ref().map_or(0, |(_, value)| *value);
+            if let Some(entry) = entry {
+                marks.push_front(entry);
+            }
+            value
+        }
+        None => 0,
+    }
+}
+
+/// Records that the drawing `key` has had handles up to `top` written, and keeps the table bounded.
+fn raise_mark(key: &str, top: u64) {
+    let mut marks = marks();
+    let value = match marks.iter().position(|(k, _)| k == key) {
+        Some(index) => marks.remove(index).map_or(top, |(_, value)| value.max(top)),
+        None => top,
+    };
+    marks.push_front((key.to_owned(), value));
+    marks.truncate(MARKS_CAP);
+}
 
 /// Parameters of `draftbuilder.drawing.save_dxf`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -267,11 +307,12 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         (Some(f), false) => (f, database.origin() == Some(Origin::Assigned)),
         _ => (fresh_fingerprint(ctx)?, true),
     };
+    let key = fingerprint.to_braced();
     let request = Request {
         fingerprint,
         fingerprint_assigned: assigned,
         version_guid: fresh_fingerprint(ctx)?,
-        floor: database.top().max(WRITTEN.load(Ordering::Relaxed)),
+        floor: database.top().max(mark_of(&key)),
     };
     let mut exported = export(&snapshot, space, &request)?;
     // The drawing's settings replace the header values the export wrote under the same names.
@@ -304,7 +345,7 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         .copied()
         .collect();
     if let Some(top) = exported.handles.iter().map(|(_, h)| h.value()).max() {
-        WRITTEN.fetch_max(top, Ordering::Relaxed);
+        raise_mark(&key, top);
     }
     if !new.is_empty() && !p.independent_copy {
         database::record(ctx.txn()?, &new)?;

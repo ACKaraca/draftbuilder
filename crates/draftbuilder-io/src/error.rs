@@ -29,11 +29,49 @@ pub const LAYER_NAME_CASE_DUPLICATE: Reason = Reason {
     message_id: "db-io-loss-layer-name-case-duplicate",
 };
 
+/// A header variable of the file holds a value that its setting cannot take (out of range, a name
+/// the drawing lacks, or another type); the setting keeps its default.
+pub const HEADER_VALUE_IGNORED: Reason = Reason {
+    code: "db.io.header_value_ignored",
+    outcome: Outcome::Dropped,
+    severity: Severity::Warning,
+    message_id: "db-io-loss-header-value-ignored",
+};
+
+/// A header variable holds a number outside its setting's range; the value is set to the nearest bound.
+pub const HEADER_VALUE_CLAMPED: Reason = Reason {
+    code: "db.io.header_value_clamped",
+    outcome: Outcome::Approximated,
+    severity: Severity::Info,
+    message_id: "db-io-loss-header-value-clamped",
+};
+
+/// The file's current layer is frozen or missing; the current layer is layer 0.
+pub const CURRENT_LAYER_FALLBACK: Reason = Reason {
+    code: "db.io.current_layer_fallback",
+    outcome: Outcome::Mapped,
+    severity: Severity::Warning,
+    message_id: "db-io-loss-current-layer-fallback",
+};
+
+/// Header variables of the file that the save does not write back: the product keeps only its
+/// settings and the coordinate system, and the export writes its own variables.
+pub const HEADER_NOT_WRITTEN: Reason = Reason {
+    code: "db.io.header_not_written",
+    outcome: Outcome::Dropped,
+    severity: Severity::Warning,
+    message_id: "db-io-loss-header-not-written",
+};
+
 /// Every reason of this crate.
 pub const ALL: &[Reason] = &[
     FINGERPRINT_ASSIGNED,
     LAYER_ZERO_CREATED,
     LAYER_NAME_CASE_DUPLICATE,
+    HEADER_VALUE_IGNORED,
+    HEADER_VALUE_CLAMPED,
+    CURRENT_LAYER_FALLBACK,
+    HEADER_NOT_WRITTEN,
 ];
 
 #[cfg(test)]

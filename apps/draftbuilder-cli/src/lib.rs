@@ -6,7 +6,9 @@
 //! command set, with the product's drafting validators installed on every document and
 //! `view.render` answered by the drafting renderer. The product adds `render`
 //! (`render <file> --output <png> [--width N] [--height N] [--write-root D]`, module
-//! [`render`]), which draws the model space headless to a PNG file.
+//! [`render`]), which draws the model space headless to a PNG file, and `script`
+//! (`script <file> --script <commands> [--create] [--save] [--report <file>]`, module
+//! [`script`]), which runs a text file of typed command lines on the package.
 //!
 //! The working file is a document package (extension `draftb`): it holds the drawing database
 //! of an opened DXF drawing so that several processes can work on it. A script that opens a
@@ -14,6 +16,7 @@
 //! --allow-edit` with the protocol methods `command.run` and `history.undo`.
 
 pub mod render;
+pub mod script;
 
 use std::ffi::OsString;
 use std::io::{BufRead, Write};
@@ -118,6 +121,10 @@ where
     E: Write + Send,
 {
     let mut args: Vec<OsString> = args.into_iter().collect();
+    if args.first().and_then(|a| a.to_str()) == Some("script") {
+        args.remove(0);
+        return script::run(args, product, &mut stdout, &mut stderr);
+    }
     if args.first().and_then(|a| a.to_str()) != Some("render") {
         let setup = |document: &arc_doc::Document| {
             draftbuilder_commands::install(document);

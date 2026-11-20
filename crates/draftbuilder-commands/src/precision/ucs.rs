@@ -60,14 +60,23 @@ impl Ucs {
     ///
     /// `db.cmd.points_collinear` when the two points coincide or a value is not finite.
     pub fn from_points(origin: [f64; 2], toward: [f64; 2]) -> Result<Self> {
-        let d = [toward[0] - origin[0], toward[1] - origin[1]];
-        let length = d[0].hypot(d[1]);
+        Self::from_direction(origin, [toward[0] - origin[0], toward[1] - origin[1]])
+    }
+
+    /// The system with `origin` and the X direction `direction`, normalized directly (no point is
+    /// formed from the origin and the direction, so a large origin keeps the direction).
+    ///
+    /// # Errors
+    ///
+    /// `db.cmd.points_collinear` when the direction has no length or a value is not finite.
+    pub fn from_direction(origin: [f64; 2], direction: [f64; 2]) -> Result<Self> {
+        let length = direction[0].hypot(direction[1]);
         if !(length.is_finite() && length > 0.0 && origin.iter().all(|v| v.is_finite())) {
             return Err(Error::new(base_codes::POINTS_COLLINEAR));
         }
         Ok(Self {
             origin,
-            x_axis: [d[0] / length, d[1] / length],
+            x_axis: [direction[0] / length, direction[1] / length],
         })
     }
 
@@ -193,8 +202,9 @@ pub fn header_values(snapshot: &Snapshot) -> Vec<HeaderVariable> {
 /// # Errors
 ///
 /// The transaction's errors.
-pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<()> {
-    let pair = |name: &str| -> Option<[f64; 2]> {
+pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<u64> {
+    // The three components of a header vector (codes 10, 20 and 30).
+    let vector = |name: &str| -> Option<[f64; 3]> {
         let groups = drawing.header_variable(name)?;
         let get = |code: i16| {
             groups
@@ -205,15 +215,39 @@ pub fn load_header(ctx: &mut Context<'_>, drawing: &Drawing) -> Result<()> {
                     _ => None,
                 })
         };
-        Some([get(10)?, get(20)?])
+        Some([get(10)?, get(20)?, get(30).unwrap_or(0.0)])
     };
-    let (Some(origin), Some(toward)) = (pair("$UCSORG"), pair("$UCSXDIR")) else {
-        return Ok(());
+    let (Some(origin), Some(x)) = (vector("$UCSORG"), vector("$UCSXDIR")) else {
+        return Ok(0);
     };
-    let Ok(ucs) = Ucs::from_points(origin, [origin[0] + toward[0], origin[1] + toward[1]]) else {
-        return Ok(());
+    // A system is accepted only when it is planar and right-handed, the form this module keeps: the
+    // origin and the X direction have no Z, and a stated Y direction is the X direction turned a
+    // quarter turn counterclockwise. Anything else (a 3D or mirrored system) is ignored and counted.
+    let planar = origin[2].abs() <= 1e-9 && x[2].abs() <= 1e-9;
+    let y_ok = match vector("$UCSYDIR") {
+        None => true,
+        Some(y) => {
+            let turned = [-x[1], x[0]];
+            let scale = x[0].hypot(x[1]).max(1.0);
+            y[2].abs() <= 1e-9 * scale
+                && (y[0] - turned[0]).abs() <= 1e-9 * scale
+                && (y[1] - turned[1]).abs() <= 1e-9 * scale
+        }
     };
-    write(ctx.txn()?, CURRENT, Some(ucs))
+    let accepted = match (
+        planar && y_ok,
+        Ucs::from_direction([origin[0], origin[1]], [x[0], x[1]]),
+    ) {
+        (true, Ok(ucs)) => Some(ucs),
+        _ => None,
+    };
+    match accepted {
+        Some(ucs) => {
+            write(ctx.txn()?, CURRENT, Some(ucs))?;
+            Ok(0)
+        }
+        None => Ok(1),
+    }
 }
 
 /// The result of a coordinate system command: the system and its name, when it has one.
@@ -277,8 +311,14 @@ fn define(ctx: &mut Context<'_>, p: UcsParams) -> Result<UcsReport> {
                 _ => return Err(invalid()),
             };
             let next = Ucs::from_points(origin, x_point)?;
-            if next.local(y_point)[1].abs() <= 1e-9 {
+            let side = next.local(y_point)[1];
+            if side.abs() <= 1e-9 {
                 return Err(Error::new(base_codes::POINTS_COLLINEAR));
+            }
+            // The system is right-handed: the third point is on its counterclockwise side. A point on
+            // the clockwise side would make a mirrored system, which this module does not represent.
+            if side < 0.0 {
+                return Err(Error::new(codes::UCS_HANDEDNESS));
             }
             next
         }
@@ -307,6 +347,7 @@ fn save(ctx: &mut Context<'_>, p: NamedParams) -> Result<UcsReport> {
 }
 
 fn restore(ctx: &mut Context<'_>, p: NamedParams) -> Result<UcsReport> {
+    check_name(&p.name)?;
     let next = read(ctx.snapshot(), &p.name)
         .ok_or_else(|| Error::new(codes::UCS_UNKNOWN).with_detail("name", p.name.clone()))?;
     let before = current(ctx.snapshot());
@@ -315,6 +356,7 @@ fn restore(ctx: &mut Context<'_>, p: NamedParams) -> Result<UcsReport> {
 }
 
 fn delete(ctx: &mut Context<'_>, p: NamedParams) -> Result<UcsReport> {
+    check_name(&p.name)?;
     let ucs = read(ctx.snapshot(), &p.name)
         .ok_or_else(|| Error::new(codes::UCS_UNKNOWN).with_detail("name", p.name.clone()))?;
     write(ctx.txn()?, &p.name, None)?;

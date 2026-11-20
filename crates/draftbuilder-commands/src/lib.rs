@@ -37,6 +37,7 @@ pub mod precision;
 pub mod property;
 pub mod purge;
 pub mod save;
+pub mod script;
 pub mod select;
 pub mod settings;
 pub mod vocabulary;

@@ -222,7 +222,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.draw.polyline",
         area: Area::Draw,
         typed: Some("PLINE"),
-        aliases: &[],
+        aliases: &["PL"],
     },
     Name {
         id: "draftbuilder.draw.rectangle",
@@ -240,7 +240,7 @@ pub const NAMES: &[Name] = &[
         id: "draftbuilder.draw.circle",
         area: Area::Draw,
         typed: Some("CIRCLE"),
-        aliases: &[],
+        aliases: &["C"],
     },
     Name {
         id: "draftbuilder.draw.arc",

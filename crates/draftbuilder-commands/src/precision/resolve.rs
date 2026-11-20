@@ -40,7 +40,7 @@ const SNAP_ON: &str = "draft.snap.on";
 const SNAP_SPACING: &str = "draft.snap.spacing";
 const SNAP_BASE: &str = "draft.snap.base";
 const SNAP_ANGLE: &str = "draft.snap.angle";
-const APERTURE: &str = "snap.aperture";
+const GEO_SETTING: &str = "snap.object.geometric_center";
 const TYPED_FIRST: &str = "snap.override.typed_first";
 
 /// How close, in degrees, the cursor must be to a polar alignment angle to lock to it.
@@ -85,7 +85,14 @@ pub fn running_set(values: &Values, over: Override) -> SnapModes {
     match over {
         Override::Off => SnapModes::NONE,
         Override::Snap(kind) => SnapModes::of(&[kind]),
-        Override::None if values.flag(OBJECT_ON) => snaps::modes_of(values.int(RUNNING)),
+        Override::None if values.flag(OBJECT_ON) && !snaps::suppressed(values.int(RUNNING)) => {
+            let modes = snaps::modes_of(values.int(RUNNING));
+            if values.flag(GEO_SETTING) {
+                modes.with(SnapKind::GeometricCenter)
+            } else {
+                modes
+            }
+        }
         Override::None => SnapModes::NONE,
     }
 }
@@ -112,10 +119,10 @@ fn object_snap(
 }
 
 /// The snap step in effect: the rectangular grid of the snap setting, when snap is on and its
-/// spacing is positive. Object snap off for the pick turns the step off too.
-fn snap_step(values: &Values, over: Override) -> Option<SnapStep> {
+/// spacing is positive. A one-pick `NON` suppresses object snaps only; the step still applies.
+fn snap_step(values: &Values) -> Option<SnapStep> {
     let spacing = values.point(SNAP_SPACING);
-    if over == Override::Off || !values.flag(SNAP_ON) || spacing[0] <= 0.0 || spacing[1] <= 0.0 {
+    if !values.flag(SNAP_ON) || spacing[0] <= 0.0 || spacing[1] <= 0.0 {
         return None;
     }
     let base = values.point(SNAP_BASE);
@@ -163,7 +170,7 @@ pub fn resolve(request: &Request<'_>, values: &Values) -> Result<Pick> {
         tracked: request.tracked.map(|p| Point2::new(p[0], p[1])),
         ortho: values.flag(ORTHO),
         polar: polar.as_ref(),
-        step: snap_step(values, request.over),
+        step: snap_step(values),
     };
     let constrained = constrain(Point2::new(request.cursor[0], request.cursor[1]), &context)?;
     let snap = match constrained.source {
@@ -183,16 +190,15 @@ pub fn typed_first(values: &Values) -> bool {
     values.flag(TYPED_FIRST)
 }
 
-/// The aperture setting, in the units the caller uses for the pick: the pixel count the setting
-/// holds, as a number of drawing units.
-#[must_use]
-pub fn aperture_setting(values: &Values) -> f64 {
-    values.int(APERTURE) as f64
-}
-
-/// The code of an object snap kind in the table.
+/// The code of an object snap kind in the table, or of the geometric center.
 fn code_of(kind: SnapKind) -> Option<&'static str> {
-    SNAP_CODES.iter().find(|s| s.kind == kind).map(|s| s.code)
+    if kind == SnapKind::GeometricCenter {
+        return Some(snaps::GEOMETRIC_CENTER_CODE);
+    }
+    SNAP_CODES
+        .iter()
+        .find(|s| s.kind == Some(kind))
+        .map(|s| s.code)
 }
 
 /// The text of what decided a pick.
@@ -222,9 +228,9 @@ pub struct ResolveParams {
     /// A tracking point, in drawing units.
     #[serde(default)]
     pub tracked: Option<[f64; 2]>,
-    /// The pick aperture in drawing units; the aperture setting, as a count of units, when absent.
-    #[serde(default)]
-    pub aperture: Option<f64>,
+    /// The pick aperture, in drawing units: the largest distance from the pick to a snap candidate.
+    /// Required, finite and positive; the pixel count of the aperture setting is the host's to convert.
+    pub aperture: f64,
 }
 
 /// The resolved point of a pick.
@@ -247,14 +253,18 @@ fn resolve_command(ctx: &mut Context<'_>, p: ResolveParams) -> Result<Resolved> 
     };
     let space = crate::model_space(ctx.snapshot())
         .ok_or_else(|| arc_base::Error::new(base_codes::NO_MODEL_SPACE))?;
+    if !(p.aperture.is_finite() && p.aperture > 0.0) {
+        return Err(
+            arc_base::Error::new(base_codes::VALUE_INVALID).with_detail("field", "aperture")
+        );
+    }
     let values = Values::of(ctx.snapshot());
-    let aperture = p.aperture.unwrap_or_else(|| aperture_setting(&values));
     let pick = resolve(
         &Request {
             snapshot: ctx.snapshot(),
             space,
             cursor: p.point,
-            aperture,
+            aperture: p.aperture,
             from: p.from,
             tracked: p.tracked,
             over,
@@ -278,10 +288,12 @@ pub struct OsnapParams {
 }
 
 fn osnap(ctx: &mut Context<'_>, p: OsnapParams) -> Result<settings::Report> {
-    let bits = snaps::bits_of_codes(&p.modes)?;
-    let setting = settings::lookup(RUNNING)?;
-    settings::write(ctx, setting, Value::Int(bits))?;
-    Ok(settings::report(ctx.snapshot(), setting))
+    let (bits, geometric) = snaps::bits_of_codes(&p.modes)?;
+    let running = settings::lookup(RUNNING)?;
+    settings::write(ctx, running, Value::Int(bits))?;
+    let geo = settings::lookup(GEO_SETTING)?;
+    settings::write(ctx, geo, Value::Bool(geometric))?;
+    Ok(settings::report(ctx.snapshot(), running))
 }
 
 /// Parameters of `draftbuilder.precision.filter`: X from one point and Y from another.

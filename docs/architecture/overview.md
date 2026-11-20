@@ -396,27 +396,199 @@ block reference with a non-uniform scale cannot be exploded.
 ### Settings, precision and inquiry
 
 The settings table (`draftbuilder-commands`, `settings`) lists each setting with its product name,
-its compatibility name, type and range, scope, default, DXF header variable and catalog description.
+compatibility name, type and range, scope, default, DXF header variable and catalog description.
 Drawing-scoped values are rows of the document, so a change is one undoable transaction and the
-package keeps them. Session-scoped values live in memory for the process. Reading a DXF header fills
-the drawing-scoped values on open (`settings::header::load_header`); `settings::header::header_values`
-returns the header variables a save writes. The current layer follows a rename, and the layer
-commands refuse to delete, merge or freeze it. Profiles are not built: the settings store of the
-application shell is not a dependency of this crate.
+package keeps them. Session-scoped values live in one process-wide store (`settings::store`): the
+foundation has no session settings slot and its command context exposes neither a session identifier
+nor a document identifier at the pinned revision, so the store cannot yet be keyed per session or per
+document. A session-scope write changes no document state and creates no undo step (checked by
+`tests/review_settings.rs`). Profiles are not built.
+
+Header variables, read on open (`settings::header::load_header`) and written on save
+(`settings::header::header_values`). The product reads and writes only its own settings and the current
+coordinate system; no other header variable of a file is kept. A setting is written only when it has a
+stored row, which is a value the user set or the file gave, so a default the file never had is not
+written. On open a value the setting cannot take is ignored and counted in `db.io.header_value_ignored`;
+a number outside its range is set to the nearest bound and counted in `db.io.header_value_clamped`; a
+frozen or missing current layer falls back to layer 0 and is counted in `db.io.current_layer_fallback`.
+The open report also counts the header variables of the file that the save will not write back, in
+`db.io.header_not_written`. Angle values (`$ANGBASE`, `$SNAPANG`) are degrees in the file and radians in
+the setting; they are converted on read and write. The current layer is written by its name from the
+layer the drawing resolves (layer 0 when the stored one is gone). The current linetype is stored by
+identifier, like the layer; `ByLayer`, `ByBlock` and `Continuous` are stored by name. The current
+lineweight takes the standard values only (`settings::STANDARD_LINEWEIGHTS`). A list of additional polar
+angles takes at most `arc_draft::snap::MAX_POLAR_ANGLES` values.
+
+Layers: the current layer cannot be deleted, merged away or frozen (`db.cmd.current_layer`), and purge
+keeps it and the current linetype whatever their names. Creation on a locked current layer is allowed,
+as the foundation allows it; the new entities are on a locked layer, so they cannot be edited. The current layer is never frozen, so a
+frozen current layer can come only from a file, and that case falls back to layer 0 on open.
 
 The precision area (`draftbuilder-commands`, `precision`) resolves a pick: `precision::resolve::resolve`
-takes the snapshot, the model space, the cursor and the settings, applies the running object snap set
-or the one-pick override, then tracking, ortho, polar and the snap step, through `arc_draft::snap`.
-The object snap codes, their bits in the running set and the point filter are in `precision::snaps`.
-The inquiry commands report lengths and areas in the drawing length unit and precision, angles in
-decimal degrees, and coordinates in the current user coordinate system. A user coordinate system is
-planar, an origin and an X direction stored as drawing rows; `precision::ucs::plane_transform` gives
-the transform that the session point entry needs for typed coordinates.
+takes the snapshot, the model space, the cursor, the aperture in drawing units (required, finite and
+positive; the pixel count of the aperture setting is the host's to convert) and the settings. It applies
+the running object snap set or the one-pick override, then tracking, ortho, polar and the snap step. A
+one-pick `NON` suppresses object snaps only; the snap step still applies. The running set is stored in
+the header encoding of `$OSMODE` (`precision::snaps`): 1 end, 2 mid, 4 center, 8 node, 16 quadrant,
+32 intersection, 64 insertion, 128 perpendicular, 256 tangent, 512 nearest, 2048 apparent intersection
+(read and written, no pick uses it), 4096 extension and 8192 parallel. The geometric center has no
+header bit and is kept by its own drawing setting, `snap.object.geometric_center`. Bit 16384 suppresses
+the running snaps and the low bits are kept; values up to 32767 round-trip.
 
-Not built: profiles; the header write on save (the save command must add `header_values` to the
-exported drawing); the display formats other than decimal; 3D point filters and coordinate systems;
-the UCS icon, plan view and dynamic UCS; region and mass properties; the feed of the point entry by
-the interactive host; the drawing limits check at point entry.
+A user coordinate system is planar, an origin and a unit X direction stored as drawing rows.
+`precision::ucs::plane_transform` gives the transform that the point entry of a script needs for typed
+coordinates (the script runner applies it before each line; the interactive host is not built). A file's
+system is accepted only when it is planar and right-handed: its origin and X direction have no Z, and a
+stated Y direction is the X direction turned a quarter turn counterclockwise; a mirrored or 3D system is
+ignored and counted in `db.io.header_value_ignored`. The X direction is normalized directly, so a large
+origin keeps it. A three-point system whose third point is on the clockwise side is refused with
+`db.cmd.ucs_handedness`. The reserved systems `*current*` and `*previous*` cannot be restored or deleted.
+Ortho and polar use the frame of the current system.
+
+The inquiry commands report lengths and areas in the drawing length unit and precision, and angles in
+decimal degrees, measured from the drawing's angle base and in its direction; coordinates are in the
+current user coordinate system. Mass properties name the second moments by their integrand over the
+centroidal axes: `second_moment_about_x` is `∫ y² dA`, `second_moment_about_y` is `∫ x² dA` and
+`product_of_area` is `∫ x·y dA`. A list of points or objects holds at most `precision::inquiry::MAX_LIST`
+(10,000) entries (`db.cmd.limit_exceeded`). A self-intersecting point sequence is measured as its boundary
+runs: the area of the loops it encloses, with their orientation; it is not refused. The inquiry commands
+have the command names `draftbuilder.inquiry.*`; the typed names `DIST`, `ID`, `AREA`, `LIST` and
+`MASSPROP` are the only typed names of the inquiry area. Length, resolve and filter have no typed names.
+
+Not built: profiles; a per-session settings store (see above); the display formats other than decimal;
+3D point filters and coordinate systems; the UCS icon, plan view and dynamic UCS; the feed of the point
+entry by the interactive host; the drawing limits check at point entry; header variables other than the
+product's settings, until the foundation writes them back.
+
+Foundation gaps in this area, reported to the foundation and not compensated in the product:
+
+- the DXF header of a file opened from DWG carries the library's angle values in radians (`$ANGBASE`,
+  `$SNAPANG`): `arc-io-dwg`'s header mapping passes them unconverted; the product does not guess the
+  source's units;
+- the DWG mapper writes `$LWDISPLAY` (group 290, a flag) as an integer, which the DXF writer refuses
+  (`io.dxf.write_value_invalid`) when a product writes the variable; the product no longer writes it;
+- header variables other than the product's settings are not preserved through open and save: the
+  foundation's export builds the header from scratch.
+
+## Scripts and workflows
+
+A script is a text file of typed command lines run by `draftbuilder-commands::script` through
+arc-command's `CommandLine`, the same driver a user types into. Each line is one typed input:
+
+- a line that names a command runs it, or leaves it waiting at its first prompt; a line while a prompt
+  waits answers it, so the answers to a command come on the following lines;
+- the empty line is Enter: it accepts the prompt's default (`PLINE` ends on Enter), or repeats the last
+  command with its last parameters when no command waits (DB-CMD-011); a setting does not become the
+  last command, since settings are transparent;
+- a line whose first character is `;` is a comment; numbers in reports and errors count comments; a
+  byte order mark at the start of the script is ignored;
+- a line starting with an apostrophe runs a transparent command beside the waiting prompt (DB-CMD-012).
+  Transparent are the reading commands (`get`, `list`), the inquiry commands, `current_layer` and the
+  setting commands `set` and `setvar`. A setting set that way must be one whose value cannot change the
+  meaning of an answer already given (`settings::TRANSPARENT_SETTINGS`: the current layer, color,
+  linetype and lineweight, running snaps, ortho, polar, snap and grid). Any other setting (units, angle
+  base and direction, limits, aperture, the echo and the rest) is refused with
+  `db.cmd.setting_not_transparent`; the same setting is set normally when no prompt waits. Other
+  commands are refused with `cmd.transparent.refused`;
+- `UNDO` (or `U`) and `REDO`, with an optional count, step the document's history through
+  `arc_command::history`, as the protocol's `history.undo` and `history.redo` do. No registered command
+  undoes yet;
+- `PICKTOLERANCE <length>` sets the distance, in drawing units, within which a point picks an object
+  (default 1e-3; a positive value up to 1e6);
+- before each line the session's context units follow the drawing (a bare number is read in the
+  drawing's length unit) and the typed coordinates are in the drawing's current user coordinate system;
+- a point typed at a prompt that asks for objects picks the topmost object (the last in draw order)
+  whose curves pass through it within the tolerance. The box around the point is gathered from one
+  candidate index per document revision, so the picks of a script in one revision share it. A point whose
+  box does not exist at the scale of its coordinates picks nothing (`db.cmd.pick_none`). A selection also
+  takes a window (`W`) or a crossing (`C`) given by two corners. A script names an object only by a point
+  on it: it has no pointer and objects have no names; a typed coordinate is never snapped;
+- the script stops at its first failing line and reports the line number, its text, the waiting command if
+  any, and the typed error. A script that ends while a command waits fails with `db.cmd.script_pending`.
+  A cancelled command is a failure too (`cmd.cancelled`); no typed line cancels at the pinned revision.
+
+Limits, named in the error (`db.cmd.script_limit`, detail `limit`): 16 MiB of script (refused before it
+runs, exit code 6), 64 KiB per line, 1,000,000 lines and 1,024 whitespace-separated tokens per line. The
+script is read line by line; a script over a line limit stops at the first line that exceeds it, so the
+lines before it are run. A pick or a window takes at most the 1,000,000 candidates of a space
+(`db.cmd.limit_exceeded`).
+
+Each completed command reports what it changed, from its own transaction: the objects it created, the
+objects it rewrote (changed) and the objects it deleted, net within the transaction. A history step has
+no transaction of its own, so its counts compare the snapshots before and after it.
+
+The command echo setting (`command.echo`, `CMDECHO`) writes each typed line to the echo stream as a log
+record before it runs; the setting is read before each line, so the line that switches it on is not
+echoed. The setting is kept in the process-wide store (see above).
+
+The CLI runs a script on a package with `draftbuilder-cli script <file.draftb> --script <file>`, with
+`--create`, `--save`, `--allow-edit`, `--report <file>`, `--read-root` and `--write-root`. Before anything
+runs, the report path is checked against the write roots, the script file is read through a read root
+(refused beyond the 16 MiB cap), a new package name is reserved, or an existing package is checked against
+the read roots, and the save path is checked against the write roots when `--save` is given. A created
+package whose write fails loses its placeholder. The report is the same JSON on standard output and in the
+`--report` file: the lines, each completed command with its counts, the totals, the preservation reports
+of the opens and saves, the skipped objects and the failure. The package is saved only when the script
+succeeds and `--save` is given; a created package that is not saved is removed, and so is a created
+package whose run fails. Exit codes are the shared ones.
+
+Handles. A save writes the handles of the objects it writes; the objects that had none get handles above
+a floor. The floor is the larger of the document's high-water mark and the highest handle the save has
+already written for this drawing in this process. That mark is kept per drawing, keyed by its fingerprint,
+in a table of 16 entries (the least recently used goes first). Its purpose: a save that is undone removes
+its handles from the document, and the mark keeps those handles from being issued again for this drawing
+in this process. Another drawing has another fingerprint and its handles do not depend on this one
+(`tests/save_marks.rs`). A second save of an unchanged drawing keeps the handles of its entities. Two
+limits remain: a new drawing takes its fingerprint from the script's identifier stream, so two new
+drawings made by the same command sequence share a fingerprint, and the export numbers its own records
+(tables, layouts, block markers) above the handles the document has bound, so a second save of the same
+drawing renumbers them (`save_marks.rs`, ignored test).
+
+The product's workflows run as scripts, with their tests in `apps/draftbuilder-cli/tests`:
+
+- W01 (`w01.rs`, `tests/data/w01.scr`, `tests/data/w01_no_array.scr`): the team template is a DXF written
+  for the test. The script creates the drawing with its layers and units, sets the running snaps, polar
+  increment and grid as settings, draws the outline with a polar entry and a direct distance along a
+  locked direction, draws holes, arrays one of them (`ARRAYRECT`, the sources picked by point), rounds the
+  corners (`FILLET`, polyline form), offsets, trims, undoes two steps and redoes one, and saves. The array
+  version is refused at the save (`db.cmd.export_drops_objects`, nothing written), so the save of the
+  array-free version is the one whose file is compared. Checks: the commands, the counts, the exact
+  coordinates of the outline, its offset, the holes and the lines (to 1e-9), the trim and the states of
+  undo and redo, two replays with the same database before the save, two processes with byte-identical
+  files, and the handles of the file, which are the handles the database binds and which a reopen gives
+  back.
+- W05 (`w05.rs`, `tests/data/w05.scr`, `tests/data/partner_drawing.dxf`): the partner drawing (layers, a
+  closed polyline, text, a block with an insert, a custom entity and a custom object of classes the product
+  does not model, extended data, an unknown header variable and a fingerprint) is opened, its preservation
+  report is read, the plan is moved by a window, the layer of one wall changes, and the drawing is saved.
+  Checks: the report entries, the moved coordinates, the layers, the handles of the entities, the custom
+  object written back group for group, the custom entity's groups and extended data, the identifiers of the
+  entities after an unedited round trip, and the DWG variant (the foundation's DWG fixture opened and saved
+  as DXF).
+
+Gap tests, ignored, each with its reason (run with `--include-ignored`; each fails today):
+
+- the extended data of an ordinary entity is not written back (`w05.rs`);
+- the class records and the application table of a file are not written back (`w05.rs`);
+- the model-space owner of a preserved record is written as the export's own handle (`w05.rs`);
+- the root dictionary entry that names a preserved object is dropped (`w05.rs`);
+- a custom entity does not move with the plan: it is a preserved record, not an object (`w05.rs`);
+- a header variable other than the product's settings does not survive the save (`w05.rs`,
+  `settings_round_trip.rs`);
+- a second save of an unchanged drawing writes the same bytes apart from the version identifier: the
+  export renumbers its own records (`save_marks.rs`).
+
+Not covered by a script, with the reason:
+
+- object snaps and polar tracking at picks: a typed point bypasses the snap resolution
+  (`precision::resolve`), which reads a cursor; the resolution is tested by that module's own tests;
+- `snap-from` offsets (`FROM`): no prompt accepts a base point and an offset;
+- the direction of a direct distance by pointer: only the `<angle` lock is scriptable;
+- saving a drawing with an array: the export has no array mapping, so the save is refused (asserted);
+- moving a custom entity or object: a preserved record is not an object of the drawing;
+- cancelling a command: no typed line cancels one at the pinned revision, so the cancel error is not
+  reachable from a script;
+- DWG save (M3) and a save to an older version (DB-DBASE-029).
 
 ## Testing strategy
 

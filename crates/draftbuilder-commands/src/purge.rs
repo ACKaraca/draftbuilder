@@ -173,9 +173,14 @@ fn candidates(snapshot: &Snapshot, categories: &[Category]) -> Vec<Removed> {
             ids.sort();
             for id in ids {
                 let name = name_of(snapshot, Some(id));
-                let keep = name
-                    .as_deref()
-                    .is_some_and(|n| protected(category, n) || named_by_preserved(&preserved, n));
+                // The current layer and the current linetype are kept whatever their name (DB-LAYER):
+                // the drawing's settings name them.
+                let current = crate::settings::is_current_layer(snapshot, id)
+                    || crate::settings::current_linetype(snapshot) == Some(id);
+                let keep = current
+                    || name.as_deref().is_some_and(|n| {
+                        protected(category, n) || named_by_preserved(&preserved, n)
+                    });
                 if !keep {
                     out.push(Removed {
                         category,

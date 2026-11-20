@@ -1,0 +1,13 @@
+; Workflow W05 (docs/product/workflows.md): open a partner's drawing, read its preservation report
+; (returned by OPEN), move the whole plan, change the layer of one wall, and give the drawing back as
+; DXF. Placeholders are filled by the test: the partner drawing and the output file. The window takes
+; every entity of the plan, and the layer change picks the right wall, which is drawn last there.
+
+OPEN path="{partner}"
+MOVE
+W -1000,-1000 5000,4000
+0,0
+1000,500
+CHPROP layer=PLAN
+5000,2000
+SAVE path="{output}"

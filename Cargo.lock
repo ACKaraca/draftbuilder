@@ -748,7 +748,9 @@ dependencies = [
  "arc-command",
  "arc-doc",
  "arc-gpu",
+ "arc-io-dwg",
  "draftbuilder-commands",
+ "draftbuilder-model",
  "image",
  "serde_json",
 ]

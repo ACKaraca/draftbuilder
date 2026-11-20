@@ -38,7 +38,11 @@ fn osnap(env: &mut Env, modes: &str) {
 }
 
 /// Resolves a pick and returns the result.
-fn resolve(env: &mut Env, params: Json) -> Json {
+fn resolve(env: &mut Env, mut params: Json) -> Json {
+    // The aperture is a required parameter in drawing units; the tests pick within one unit.
+    if params.get("aperture").is_none() {
+        params["aperture"] = json!(1.0);
+    }
     env.run("draftbuilder.precision.resolve", params)
 }
 
@@ -67,7 +71,7 @@ fn an_override_replaces_the_running_set_for_one_pick_only() {
     let mid = resolve(&mut env, json!({"point": [5.2, 0.1], "over": "MID"}));
     assert_eq!(mid["point"], json!([5.0, 0.0]));
     assert_eq!(mid["snap"], "MID");
-    let running = resolve(&mut env, json!({"point": [5.2, 0.1]}));
+    let running = resolve(&mut env, json!({"point": [5.2, 0.1], "aperture": 10.0}));
     assert_eq!(running["point"], json!([10.0, 0.0]));
     assert_eq!(running["snap"], "END");
 }
@@ -89,7 +93,7 @@ fn an_unknown_override_code_is_a_typed_error() {
     drawing(&mut env);
     let error = env.invoke(
         "draftbuilder.precision.resolve",
-        json!({"point": [0, 0], "over": "XYZ"}),
+        json!({"point": [0, 0], "over": "XYZ", "aperture": 0.1}),
     );
     assert_eq!(code_of(error), "db.cmd.snap_unknown");
     let osnap_error = env.invoke("draftbuilder.precision.osnap", json!({"modes": "END,XYZ"}));
@@ -435,13 +439,45 @@ fn mass_properties_of_a_closed_circle_are_its_area_and_moments() {
     assert!((result["area"].as_f64().unwrap() - 4.0 * pi).abs() < 1e-9);
     assert!((result["centroid"][0].as_f64().unwrap() - 1.0).abs() < 1e-9);
     assert!((result["centroid"][1].as_f64().unwrap() - 2.0).abs() < 1e-9);
-    let moments = result["moments"].as_array().unwrap();
-    assert!((moments[0].as_f64().unwrap() - 4.0 * pi).abs() < 1e-6);
-    assert!((moments[1].as_f64().unwrap() - 4.0 * pi).abs() < 1e-6);
-    assert!(moments[2].as_f64().unwrap().abs() < 1e-6);
+    assert!((result["second_moment_about_x"].as_f64().unwrap() - 4.0 * pi).abs() < 1e-6);
+    assert!((result["second_moment_about_y"].as_f64().unwrap() - 4.0 * pi).abs() < 1e-6);
+    assert!(result["product_of_area"].as_f64().unwrap().abs() < 1e-6);
     let open = segment(&mut env, [0.0, 0.0], [3.0, 4.0]);
     assert_eq!(
         code_of(env.invoke("draftbuilder.inquiry.mass", json!({"object": open}))),
         "db.cmd.not_closed"
+    );
+}
+
+#[test]
+fn the_second_moments_are_named_by_their_integrand() {
+    // A rectangle 4 wide and 1 high, about its centroid: the integral of y squared is 4 * (1/12) = 1/3
+    // (the moment about the X axis) and the integral of x squared is 1 * (16/3) (about the Y axis).
+    let mut env = Env::new();
+    drawing(&mut env);
+    let rectangle = env.run(
+        "draftbuilder.draw.polyline",
+        json!({"vertices": [{"point": [0.0, 0.0]}, {"point": [4.0, 0.0]},
+                            {"point": [4.0, 1.0]}, {"point": [0.0, 1.0]}], "close": true}),
+    )["ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let result = env.run("draftbuilder.inquiry.mass", json!({"object": rectangle}));
+    assert!((result["second_moment_about_x"].as_f64().unwrap() - 1.0 / 3.0).abs() < 1e-9);
+    assert!((result["second_moment_about_y"].as_f64().unwrap() - 16.0 / 3.0).abs() < 1e-9);
+    assert!(result["product_of_area"].as_f64().unwrap().abs() < 1e-9);
+}
+
+#[test]
+fn an_inquiry_takes_at_most_ten_thousand_points() {
+    let mut env = Env::new();
+    drawing(&mut env);
+    let points: Vec<[f64; 2]> = (0..10_001)
+        .map(|i| [f64::from(i), f64::from(i % 7)])
+        .collect();
+    assert_eq!(
+        code_of(env.invoke("draftbuilder.inquiry.area", json!({"points": points}))),
+        "db.cmd.limit_exceeded"
     );
 }

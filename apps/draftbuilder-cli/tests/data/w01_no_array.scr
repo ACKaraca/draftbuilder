@@ -1,0 +1,57 @@
+; Workflow W01 without the array (docs/product/workflows.md). The array of step 4 cannot be written
+; to DXF yet, so the second hole is drawn with C at the position the array would give it, and the
+; rest of the workflow follows in the drawing without the array. Placeholders are filled by the test:
+; the template and the output file. A blank line is Enter.
+
+; Steps 1 and 2: the template, the current layer and the running settings.
+NEW template="{template}"
+SETVAR name=CLAYER value=OUTLINE
+OSNAP END,MID,INT,CEN,PER
+SETVAR name=POLARANG value=45
+SETVAR name=POLARMODE value=1
+SETVAR name=GRIDMODE value=1
+SETVAR name=GRIDUNIT value=1,1
+; Step 3: the outline, with relative polar points and a direct distance along a locked direction.
+PL
+0,0
+@20<0
+<90
+10
+@20<180
+C
+; Step 4: the holes.
+SETVAR name=CLAYER value=HOLES
+C
+5,5
+1
+C
+15,5
+1
+; Step 5: round the corners, offset the outline inwards, trim a centerline by the wall, then undo two
+; steps and redo one. The centerline and the wall are drawn for the trim.
+F
+polyline
+10,0
+2
+O
+1
+10,0
+10,5
+SETVAR name=CLAYER value=OUTLINE
+LINE
+0,5
+20,5
+
+LINE
+12,-1
+12,11
+
+TR
+12,5
+9,5
+9,5
+end
+UNDO 2
+REDO
+; Step 6: save as DXF and reopen (the test reopens the file).
+SAVE path="{output}"

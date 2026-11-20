@@ -163,12 +163,17 @@ once per session and return a typed "unsupported setting" result rather than a s
 
 ## Scripts
 
-A script is a text file of command-line tokens run through the same token path as typing. Scripts
-run interactively (with display updates) or headless through the CLI over a set of drawings, with a
-per-drawing report; `RSCRIPT`, delays and resume points behave conventionally
+A script is a text file of command-line tokens run through the same token path as typing. Scripts are
+designed to run interactively (with display updates) or headless through the CLI over a set of drawings,
+with a per-drawing report, and `RSCRIPT`, delays and resume points behave conventionally
 ([DB-AUTO-011](../product/capabilities/18-customization-automation.md),
-[DB-AUTO-012](../product/capabilities/18-customization-automation.md)). A failing command stops the
-script for that drawing, rolls back the failing command and records the failure.
+[DB-AUTO-012](../product/capabilities/18-customization-automation.md)). As implemented in M1, a script is
+typed lines run through `CommandLine` on one drawing, one package per `draftbuilder-cli script` run; the
+interactive run, the set of drawings, `RSCRIPT`, delays and resume points are not built yet. The rules and
+the report are in [overview.md](overview.md#scripts-and-workflows). A line that sets a setting beside a waiting
+prompt is refused unless the setting cannot change the meaning of an answer already given (the list is
+`settings::TRANSPARENT_SETTINGS`); a script is limited in size, line length, line count and tokens per line. A failing command stops the script for
+that drawing, rolls back the failing command and records the failure.
 
 ## Lisp-dialect interpreter
 

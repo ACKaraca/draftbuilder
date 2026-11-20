@@ -353,12 +353,23 @@ pub const TABLE: &[Setting] = &[
     Setting {
         name: "snap.object.running",
         compat: Some("OSMODE"),
-        kind: Kind::Int { min: 0, max: 16383 },
+        kind: Kind::Int { min: 0, max: 32767 },
         scope: Scope::Drawing,
         default: "63",
         header: hv("$OSMODE", 70),
         description: Text {
             message_id: "db-setting-snap-object-running",
+        },
+    },
+    Setting {
+        name: "snap.object.geometric_center",
+        compat: None,
+        kind: Kind::Bool,
+        scope: Scope::Drawing,
+        default: "false",
+        header: None,
+        description: Text {
+            message_id: "db-setting-snap-object-geometric-center",
         },
     },
     Setting {
@@ -521,6 +532,27 @@ pub const TABLE: &[Setting] = &[
             message_id: "db-setting-snap-aperture",
         },
     },
+];
+
+/// The settings a script may set while another command's prompt waits (DB-CMD-012): their values
+/// cannot change the meaning of an answer already given. Other settings (units, angle base and
+/// direction, limits, the coordinate system and the rest) are refused while a prompt waits.
+pub const TRANSPARENT_SETTINGS: &[&str] = &[
+    "draft.layer.current",
+    "draft.color.current",
+    "draft.linetype.current",
+    "draft.lineweight.current",
+    "snap.object.running",
+    "draft.ortho",
+    "draft.polar.on",
+    "draft.polar.increment",
+    "draft.polar.additional",
+    "draft.snap.on",
+    "draft.snap.spacing",
+    "draft.snap.base",
+    "draft.snap.angle",
+    "draft.grid.on",
+    "draft.grid.spacing",
 ];
 
 /// The error codes of the settings area.
@@ -732,9 +764,8 @@ pub fn parse_json(setting: &Setting, json: &serde_json::Value) -> Result<Value> 
             })
             .collect::<Result<Vec<f64>>>()
             .map(Value::List),
-        (Kind::Layer | Kind::Linetype | Kind::Unit, Json::String(text)) => {
-            parse_text(setting, text)
-        }
+        // A typed value arrives as text (`SETVAR POLARANG 45`): it is read as the setting's text.
+        (_, Json::String(text)) => parse_text(setting, text),
         _ => Err(invalid(setting)),
     }
 }
@@ -785,12 +816,45 @@ pub fn stored_form(snapshot: &Snapshot, setting: &Setting, value: Value) -> Resu
         (Kind::Linetype, Value::Text(name)) => match fold(&name).as_str() {
             "BYLAYER" => Ok(Value::Text("ByLayer".to_owned())),
             "BYBLOCK" => Ok(Value::Text("ByBlock".to_owned())),
-            _ => linetype_ref(snapshot, &name)
-                .map(|_| Value::Text(name.clone()))
-                .map_err(|_| invalid(setting)),
+            "CONTINUOUS" => Ok(Value::Text("Continuous".to_owned())),
+            _ => match linetype_ref(snapshot, &name) {
+                // The linetype is stored by identifier, like the layer: a rename does not stale it.
+                Ok(Some(id)) => Ok(Value::Text(id.to_string())),
+                _ => Err(invalid(setting)),
+            },
         },
+        (Kind::Angles, Value::List(angles)) if angles.len() > arc_draft::snap::MAX_POLAR_ANGLES => {
+            Err(invalid(setting))
+        }
+        (Kind::Int { .. }, Value::Int(value)) if setting.name == CURRENT_LINEWEIGHT => {
+            if STANDARD_LINEWEIGHTS.contains(&value) {
+                Ok(Value::Int(value))
+            } else {
+                Err(invalid(setting))
+            }
+        }
         (_, value) => Ok(value),
     }
+}
+
+/// The standard lineweights in hundredths of a millimeter, with the three codes of by layer, by block
+/// and the default weight (-1, -2 and -3). A current lineweight is one of these.
+pub const STANDARD_LINEWEIGHTS: &[i64] = &[
+    -3, -2, -1, 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120,
+    140, 158, 200, 211,
+];
+
+/// The identifier of the current linetype when it names a linetype object of `snapshot`.
+#[must_use]
+pub fn current_linetype(snapshot: &Snapshot) -> Option<ObjectId> {
+    let text = store::row_value(snapshot, CURRENT_LINETYPE).and_then(|value| match value {
+        Value::Text(text) => Some(text),
+        _ => None,
+    })?;
+    let id = text.parse::<ObjectId>().ok()?;
+    let handle = snapshot.resolve(id).ok()?;
+    (snapshot.type_key(handle).map(|k| k.as_str()) == Some(arc_draft::types::LINETYPE))
+        .then_some(id)
 }
 
 /// The product name of the length precision.
@@ -808,6 +872,7 @@ pub const CURRENT_LAYER: &str = "draft.layer.current";
 pub const CURRENT_COLOR: &str = "draft.color.current";
 /// The product name of the current linetype.
 pub const CURRENT_LINETYPE: &str = "draft.linetype.current";
+
 /// The product name of the current lineweight.
 pub const CURRENT_LINEWEIGHT: &str = "draft.lineweight.current";
 /// The product name of the current transparency.
@@ -845,6 +910,14 @@ pub fn presented(snapshot: &Snapshot, setting: &Setting, value: &Value) -> serde
                 .unit()
                 .map_or("unitless", |unit| unit.name);
             serde_json::Value::String(name.to_owned())
+        }
+        (Kind::Linetype, Value::Text(text)) => {
+            let name = text
+                .parse::<ObjectId>()
+                .ok()
+                .and_then(|id| name_of(snapshot, Some(id)))
+                .unwrap_or_else(|| text.clone());
+            serde_json::Value::String(name)
         }
         (Kind::Layer, Value::Text(text)) => {
             let name = text
@@ -940,12 +1013,19 @@ fn color_fields(values: &store::Values, out: &mut Vec<(usize, Doc)>) {
     }
 }
 
-/// The linetype fields of [`entity_fields`].
+/// The linetype fields of [`entity_fields`]. A stored identifier that no longer names a linetype
+/// gives by layer, as a removed linetype does on the entities.
 fn linetype_fields(snapshot: &Snapshot, values: &store::Values, out: &mut Vec<(usize, Doc)>) {
     let name = values.text(CURRENT_LINETYPE);
+    if let Some(id) = current_linetype(snapshot) {
+        out.push((entity::LINETYPE_BY, by(By::Object)));
+        out.push((entity::LINETYPE, Doc::Reference(id)));
+        return;
+    }
     match fold(&name).as_str() {
-        "BYLAYER" => out.push((entity::LINETYPE_BY, by(By::Layer))),
         "BYBLOCK" => out.push((entity::LINETYPE_BY, by(By::Block))),
+        "BYLAYER" => out.push((entity::LINETYPE_BY, by(By::Layer))),
+        _ if name.parse::<ObjectId>().is_ok() => out.push((entity::LINETYPE_BY, by(By::Layer))),
         _ => {
             out.push((entity::LINETYPE_BY, by(By::Object)));
             if let Ok(Some(id)) = linetype_ref(snapshot, &name) {
@@ -1352,8 +1432,9 @@ fn specs() -> Vec<CommandSpec> {
 /// `cmd.duplicate` when an identifier is already registered, and the errors of
 /// [`register_names`].
 pub fn register(registry: &mut Registry) -> Result<()> {
+    // Settings commands may run beside a waiting prompt (DB-CMD-012).
     for spec in specs() {
-        registry.register(spec)?;
+        registry.register(spec.transparent())?;
     }
     register_names(registry, Area::Settings)
 }

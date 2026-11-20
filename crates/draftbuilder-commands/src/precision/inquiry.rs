@@ -206,11 +206,27 @@ fn entity_of(snapshot: &Snapshot, id: IdParam) -> Result<arc_base::ObjectId> {
     }
 }
 
+/// The most points or objects an inquiry takes in one call.
+pub const MAX_LIST: usize = 10_000;
+
+/// Refuses a list longer than [`MAX_LIST`].
+fn check_count(count: usize) -> Result<()> {
+    if count > MAX_LIST {
+        return Err(Error::new(crate::error::codes::LIMIT_EXCEEDED)
+            .with_detail("limit", MAX_LIST.to_string()));
+    }
+    Ok(())
+}
+
 /// The area and perimeter of a point sequence, closed by its last segment.
+///
+/// A self-intersecting sequence is measured as its boundary runs: the area of the loops it encloses
+/// with their orientation, not refused.
 fn polygon_measure(points: &[[f64; 2]]) -> Result<(f64, f64)> {
     if points.len() < 3 {
         return Err(Error::new(codes::POINTS_TOO_FEW));
     }
+    check_count(points.len())?;
     let curves = (0..points.len())
         .map(|i| {
             let a = points[i];
@@ -287,6 +303,7 @@ pub struct AreaTexts {
 
 /// The area and perimeter of the figures of `params`, joined to the running total.
 fn area_of(ctx: &Context<'_>, params: AreaParams) -> Result<AreaResult> {
+    check_count(params.objects.as_ref().map_or(0, Vec::len))?;
     let snapshot = ctx.snapshot();
     let mut measured = Vec::new();
     if let Some(points) = &params.points {
@@ -382,6 +399,7 @@ pub struct Lengths {
 }
 
 fn length(ctx: &mut Context<'_>, p: ObjectsParams) -> Result<Lengths> {
+    check_count(p.objects.len())?;
     let snapshot = ctx.snapshot();
     let values = Values::of(snapshot);
     let tolerance = Tolerance::DEFAULT;
@@ -672,8 +690,9 @@ pub fn register(registry: &mut Registry) -> Result<()> {
             list,
         ),
     ];
+    // Inquiry commands read the drawing and may run beside a waiting prompt (DB-CMD-012).
     for spec in specs {
-        registry.register(spec)?;
+        registry.register(spec.transparent())?;
     }
     Ok(())
 }
@@ -708,9 +727,16 @@ pub struct MassProperties {
     pub perimeter: f64,
     /// The centroid of the area, in the current coordinate system, in drawing units.
     pub centroid: [f64; 2],
-    /// The second moments of the area about axes through the centroid parallel to the current
-    /// coordinate system: `xx`, `yy` and `xy`, in drawing units to the fourth power.
-    pub moments: [f64; 3],
+    /// The second moment of the area about the centroidal axis parallel to the current X axis:
+    /// the integral of the squared distance from that axis, `∫ y² dA` in the centroid's frame, in
+    /// drawing units to the fourth power.
+    pub second_moment_about_x: f64,
+    /// The second moment of the area about the centroidal axis parallel to the current Y axis:
+    /// `∫ x² dA` in the centroid's frame, in drawing units to the fourth power.
+    pub second_moment_about_y: f64,
+    /// The product of the area about the centroidal axes: `∫ x·y dA` in the centroid's frame, in
+    /// drawing units to the fourth power.
+    pub product_of_area: f64,
     /// The display forms of the area, the perimeter and the centroid.
     pub texts: MassTexts,
 }
@@ -748,7 +774,11 @@ fn mass(ctx: &mut Context<'_>, p: MassParams) -> Result<MassProperties> {
         area: measured.area,
         perimeter: measured.perimeter,
         centroid,
-        moments: [moments.xx, moments.yy, moments.xy],
+        // The foundation names its moments by the integrand over the x and y of its own frame:
+        // `xx` is ∫x² dA, which is the second moment about the y axis; `yy` is ∫y² dA, about x.
+        second_moment_about_x: moments.yy,
+        second_moment_about_y: moments.xx,
+        product_of_area: moments.xy,
         texts: MassTexts {
             area: area_text(snapshot, &values, measured.area)?,
             perimeter: length_text(snapshot, &values, measured.perimeter)?,

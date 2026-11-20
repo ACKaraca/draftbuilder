@@ -29,6 +29,12 @@ pub mod codes {
         category: Category::InvalidInput,
         message_id: "db-cmd-ucs-name",
     };
+    /// A three-point coordinate system whose third point is on the clockwise side of the X direction.
+    pub const UCS_HANDEDNESS: ErrorCode = ErrorCode {
+        code: "db.cmd.ucs_handedness",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-ucs-handedness",
+    };
     /// A snap override or running-set code is not one of the codes of the table.
     pub const SNAP_UNKNOWN: ErrorCode = ErrorCode {
         code: "db.cmd.snap_unknown",
@@ -58,6 +64,7 @@ pub mod codes {
     pub const ALL: &[ErrorCode] = &[
         UCS_UNKNOWN,
         UCS_NAME,
+        UCS_HANDEDNESS,
         SNAP_UNKNOWN,
         NOT_CLOSED,
         POINTS_TOO_FEW,

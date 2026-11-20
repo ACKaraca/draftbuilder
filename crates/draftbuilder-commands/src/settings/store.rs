@@ -97,6 +97,16 @@ fn row(setting: &Setting, id: i64, value: &Value) -> StoredForeign {
     }
 }
 
+/// The names of the drawing-scoped settings that have a stored row in `snapshot`, in one pass.
+#[must_use]
+pub fn stored_names(snapshot: &Snapshot) -> std::collections::BTreeSet<String> {
+    snapshot
+        .foreign_rows()
+        .filter(|row| row.source_format == FORMAT && row.record_kind == RECORD_KIND)
+        .filter_map(|row| row.source_id.clone())
+        .collect()
+}
+
 /// The effective values of every setting of the table, for a computation that reads several.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Values {
@@ -107,9 +117,31 @@ impl Values {
     /// The effective values of the drawing `snapshot` and of the session.
     #[must_use]
     pub fn of(snapshot: &Snapshot) -> Self {
+        // One pass over the rows of the document, not one per setting: a drawing has many rows.
+        let mut rows: BTreeMap<&str, &StoredForeign> = BTreeMap::new();
+        for row in snapshot.foreign_rows() {
+            if row.source_format == FORMAT
+                && row.record_kind == RECORD_KIND
+                && let Some(name) = row.source_id.as_deref()
+            {
+                rows.entry(name).or_insert(row);
+            }
+        }
         let values = TABLE
             .iter()
-            .map(|setting| (setting.name, current(snapshot, setting)))
+            .map(|setting| {
+                let stored = match setting.scope {
+                    Scope::Drawing => rows.get(setting.name).and_then(|row| {
+                        let json: serde_json::Value = serde_json::from_slice(&row.data).ok()?;
+                        parse_json(setting, &json).ok()
+                    }),
+                    Scope::Session => session_get(setting),
+                };
+                (
+                    setting.name,
+                    stored.unwrap_or_else(|| default_value(setting)),
+                )
+            })
             .collect();
         Self { values }
     }

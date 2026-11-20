@@ -21,7 +21,7 @@ use arc_geom::{
     Aabb2, Containment, Curve2, Intersection, Loop2, Polyline2, PolylineVertex, Segment2, intersect,
 };
 
-use super::candidates::{Options, Part, Pick, gather};
+use super::candidates::{Candidates, Options, Part, Pick, gather};
 use crate::error::codes;
 
 /// The most vertices of a window or crossing polygon, and of a fence.
@@ -161,6 +161,25 @@ fn select_in(
     options: &Options,
 ) -> Result<Pick> {
     let candidates = gather(snapshot, space, *options)?;
+    select_among(&candidates, area, crossing)
+}
+
+/// The window (`crossing` false) or the crossing (`crossing` true) of `corners` among candidates
+/// gathered once for a space, so a script's picks in one revision share one index.
+///
+/// # Errors
+///
+/// `db.cmd.selection_invalid` for a rectangle with no width or height.
+pub(crate) fn pick_among(
+    candidates: &Candidates,
+    corners: [Point2; 2],
+    crossing: bool,
+) -> Result<Pick> {
+    select_among(candidates, &rectangle(corners[0], corners[1])?, crossing)
+}
+
+/// Selects among the candidates `area` contains or meets.
+fn select_among(candidates: &Candidates, area: &Area, crossing: bool) -> Result<Pick> {
     let edges = area.edges()?;
     let bounds = area.bounds();
     let positions = if crossing {

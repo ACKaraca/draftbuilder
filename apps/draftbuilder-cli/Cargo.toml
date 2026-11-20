@@ -20,6 +20,10 @@ serde_json = { workspace = true }
 [dev-dependencies]
 # Decodes the PNG files the tests read back.
 image = { workspace = true }
+# The DWG fixture helper of the foundation, for the DWG open of the partner workflow.
+arc-io-dwg = { workspace = true, features = ["testing"] }
+# The handles of the objects, for the identity checks of the workflows.
+draftbuilder-model = { path = "../../crates/draftbuilder-model" }
 
 [lints]
 workspace = true

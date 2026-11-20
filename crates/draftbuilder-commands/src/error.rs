@@ -215,8 +215,43 @@ pub mod codes {
         category: Category::InvalidInput,
         message_id: "db-cmd-array-owner-mixed",
     };
+    /// A script ends while a command still waits at a prompt for an answer.
+    pub const SCRIPT_PENDING: ErrorCode = ErrorCode {
+        code: "db.cmd.script_pending",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-script-pending",
+    };
+    /// A script line that is a history directive has a count that is not a positive whole number.
+    pub const SCRIPT_DIRECTIVE: ErrorCode = ErrorCode {
+        code: "db.cmd.script_directive",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-script-directive",
+    };
+    /// A point typed for a pick or a selection lies on no object of the model space.
+    pub const PICK_NONE: ErrorCode = ErrorCode {
+        code: "db.cmd.pick_none",
+        category: Category::NotFound,
+        message_id: "db-cmd-pick-none",
+    };
+    /// A setting that may not change while a prompt waits is set with an apostrophe (DB-CMD-012).
+    pub const SETTING_NOT_TRANSPARENT: ErrorCode = ErrorCode {
+        code: "db.cmd.setting_not_transparent",
+        category: Category::Conflict,
+        message_id: "db-cmd-setting-not-transparent",
+    };
+    /// A script exceeds one of its limits (file size, line length, line count or tokens per line).
+    pub const SCRIPT_LIMIT: ErrorCode = ErrorCode {
+        code: "db.cmd.script_limit",
+        category: Category::LimitExceeded,
+        message_id: "db-cmd-script-limit",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
+        SETTING_NOT_TRANSPARENT,
+        SCRIPT_LIMIT,
+        SCRIPT_PENDING,
+        SCRIPT_DIRECTIVE,
+        PICK_NONE,
         DRAWING_NOT_EMPTY,
         NO_MODEL_SPACE,
         FORMAT_UNKNOWN,
