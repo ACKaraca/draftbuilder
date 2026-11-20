@@ -4,16 +4,14 @@
 //! otherwise the command is refused with `db.cmd.erase_dependent`, so no dependent loses its
 //! geometry silently.
 
-use arc_base::ObjectId;
 use arc_base::Result;
 use arc_command::{CommandSpec, Context, IdParam, Prompt, PromptState, Step};
-use arc_doc::Snapshot;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{entities, entity_selection, erase_entities, refuse_locked, selection_answer};
 use crate::draw::create::{accept_all, done, machine};
-use crate::error::{Message, codes};
+use crate::error::Message;
 
 /// Parameters of `draftbuilder.modify.erase`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -41,24 +39,9 @@ const OBJECTS: Message = Message {
     message_id: "db-cmd-modify-objects",
 };
 
-/// Fails with `db.cmd.erase_dependent` when an entity outside `ids` refers to one of them.
-fn refuse_dependents(snapshot: &Snapshot, ids: &[ObjectId]) -> Result<()> {
-    for id in ids {
-        for referrer in snapshot.referrers(*id) {
-            let source = referrer.source;
-            if !ids.contains(&source) && super::entity_key(snapshot, source).is_ok() {
-                return Err(arc_base::Error::new(codes::ERASE_DEPENDENT)
-                    .with_detail("id", source.to_string()));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn run(ctx: &mut Context<'_>, p: EraseParams) -> Result<Erased> {
     let ids = entities(ctx.snapshot(), ctx.limits(), &p.objects)?;
     refuse_locked(ctx.snapshot(), &ids)?;
-    refuse_dependents(ctx.snapshot(), &ids)?;
     erase_entities(ctx, &ids)?;
     Ok(Erased {
         objects: ids.into_iter().map(IdParam).collect(),

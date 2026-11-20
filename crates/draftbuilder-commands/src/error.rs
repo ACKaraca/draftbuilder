@@ -189,6 +189,32 @@ pub mod codes {
         category: Category::InvalidInput,
         message_id: "db-cmd-pick-invalid",
     };
+    /// The target is read-only: a save would replace it, which its owner did not allow.
+    pub const TARGET_READ_ONLY: ErrorCode = ErrorCode {
+        code: "db.cmd.target_read_only",
+        category: Category::PermissionDenied,
+        message_id: "db-cmd-target-read-only",
+    };
+    /// The export would drop objects of a kind the product creates (the detail `kind` names the first
+    /// kind, `count` the number of objects). Nothing is written.
+    pub const EXPORT_DROPS_OBJECTS: ErrorCode = ErrorCode {
+        code: "db.cmd.export_drops_objects",
+        category: Category::Unsupported,
+        message_id: "db-cmd-export-drops-objects",
+    };
+    /// Another entity outside an array's sources refers to one of them (a dimension, a hatch boundary, another
+    /// array), and the array would move the source out of the drawing's reference.
+    pub const ARRAY_DEPENDENT: ErrorCode = ErrorCode {
+        code: "db.cmd.array_dependent",
+        category: Category::Conflict,
+        message_id: "db-cmd-array-dependent",
+    };
+    /// The sources of an array are not all owned by one space or block definition.
+    pub const ARRAY_OWNER_MIXED: ErrorCode = ErrorCode {
+        code: "db.cmd.array_owner_mixed",
+        category: Category::InvalidInput,
+        message_id: "db-cmd-array-owner-mixed",
+    };
     /// Every code of this crate, for the registry check.
     pub const ALL: &[ErrorCode] = &[
         DRAWING_NOT_EMPTY,
@@ -220,6 +246,10 @@ pub mod codes {
         ALIGN_NOT_SIMILARITY,
         PARAMS_CONFLICT,
         PICK_INVALID,
+        TARGET_READ_ONLY,
+        EXPORT_DROPS_OBJECTS,
+        ARRAY_DEPENDENT,
+        ARRAY_OWNER_MIXED,
     ];
 }
 

@@ -16,7 +16,7 @@
 //! The commands read these flags with `Context::name_flags`. No command opens a dialog today, so
 //! none reads `no_dialogs` yet.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arc_base::{Error, Result};
 use arc_command::error::codes;
@@ -161,23 +161,19 @@ fn prefix_flags(prefix: char) -> Option<NameFlags> {
     }
 }
 
-/// The resolver of the product for `registry`: the vocabulary's typed names and aliases, and the
-/// identifiers, of the commands the registry holds. It answers only the prefixed forms.
-///
-/// Build it after every command and vocabulary row is registered; it names no command the
-/// registry lacks.
+/// The resolver of the product. It answers only the prefixed forms, and it decides from the name alone, so a
+/// command registered after the resolver is installed resolves like any other: a prefixed name that is an
+/// identifier (it contains a dot) is the command of that identifier, and any other prefixed name is looked
+/// up in the vocabulary's typed names and aliases. A command the registry does not hold fails there with
+/// `cmd.unknown`, so no registration order matters.
 #[must_use]
-pub fn resolver(registry: &Registry) -> NameResolver {
+pub fn resolver() -> NameResolver {
     let mut typed: BTreeMap<String, String> = BTreeMap::new();
     for row in NAMES {
-        if registry.get(row.id).is_none() {
-            continue;
-        }
         for name in row.typed.into_iter().chain(row.aliases.iter().copied()) {
             typed.insert(name.to_ascii_lowercase(), row.id.to_owned());
         }
     }
-    let identifiers: BTreeSet<String> = registry.iter().map(|spec| spec.id().to_owned()).collect();
     NameResolver::new(move |name| {
         let mut chars = name.chars();
         let flags = prefix_flags(chars.next()?)?;
@@ -185,7 +181,7 @@ pub fn resolver(registry: &Registry) -> NameResolver {
         if rest.is_empty() {
             return None;
         }
-        let command = if identifiers.contains(&rest) {
+        let command = if rest.contains('.') {
             rest
         } else {
             typed.get(&rest)?.clone()
@@ -200,8 +196,7 @@ pub fn resolver(registry: &Registry) -> NameResolver {
 ///
 /// `cmd.duplicate` when the registry already has a resolver whose aliases conflict.
 pub fn install(registry: &mut Registry) -> Result<()> {
-    let resolver = resolver(registry);
-    registry.set_name_resolver(resolver)
+    registry.set_name_resolver(resolver())
 }
 
 #[cfg(test)]

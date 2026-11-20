@@ -80,6 +80,9 @@ pub struct SaveResult {
     pub fingerprint: String,
     /// The loss and preservation report.
     pub report: serde_json::Value,
+    /// Warnings about a save that completed: the file is in place, but a step after the replace (the
+    /// directory sync on Unix) failed.
+    pub warnings: Vec<String>,
 }
 
 /// The unpredictable part of a temporary name: a hash of a fresh random state (the standard
@@ -105,21 +108,37 @@ fn check_regular_target(path: &Path) -> Result<()> {
     }
 }
 
+/// Refuses a target that exists and is marked read-only: the save would replace it, which its owner
+/// did not allow by making it read-only.
+fn check_writable_target(path: &Path) -> Result<()> {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.permissions().readonly() => Err(Error::new(codes::TARGET_READ_ONLY)),
+        _ => Ok(()),
+    }
+}
+
 /// Writes `bytes` to `path` through a temporary file beside it, then replaces `path` with it.
 ///
-/// The target is checked against the write roots and must be a regular file or absent. The
-/// temporary file is created exclusively with `Context::create_new`, under a short name with a
-/// random part, written, synced and closed; it takes the permissions of the file it replaces,
-/// then `Context::replace_file` renames it over the target. The directory is synced after the
-/// rename on Unix. On failure the temporary file is removed and `path` keeps what it held.
+/// The target is checked against the write roots, must be a regular file or absent (a symbolic link
+/// is refused, as it was before: the link itself is never replaced nor followed), and must not be
+/// read-only. The temporary file is created exclusively with `Context::create_new`, under a short name
+/// with a random part. Its permissions are those of the file it replaces, set on the open handle before
+/// any byte is written, so a private drawing is never readable under the default permissions. It is
+/// written, synced and closed, then `Context::replace_file` renames it over the target. On failure the
+/// temporary file is removed and `path` keeps what it held.
+///
+/// The directory is synced after the rename on Unix. The file is in place by then, so a failed sync is
+/// not an error: it is returned as a warning for the result, and the caller still records what the file
+/// holds.
 ///
 /// When the command is the native save of the application, `path` is the empty temporary file the
-/// application created beside its target; this writes that file, and the application renames it
-/// over the target. The application does not carry the target's permissions over, so a native
-/// save takes the permissions of its temporary file.
-fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<()> {
+/// application created beside its target; this writes that file, and the application renames it over the
+/// target. The application does not carry the target's permissions over, so a native save takes the
+/// permissions of its temporary file.
+fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<Vec<String>> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     check_regular_target(path)?;
+    check_writable_target(path)?;
     ctx.session().roots.check_write(path)?;
     let name = format!(
         ".draftbuilder-{:x}-{:016x}-{}.tmp",
@@ -129,27 +148,33 @@ fn write_atomic(ctx: &Context<'_>, path: &Path, bytes: &[u8]) -> Result<()> {
     );
     let temp_path = path.with_file_name(name);
     let result = (|| {
-        {
-            let mut file = ctx.create_new(&temp_path)?;
-            file.write_all(bytes)
-                .and_then(|()| file.sync_all())
-                .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
-        }
+        let mut file = ctx.create_new(&temp_path)?;
         if let Ok(meta) = std::fs::metadata(path) {
-            std::fs::set_permissions(&temp_path, meta.permissions())
+            file.set_permissions(meta.permissions())
                 .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
         }
-        ctx.replace_file(&temp_path, path)?;
-        sync_parent(path)
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| Error::new(arc_command::error::codes::PATH_IO).with_source(e))?;
+        drop(file);
+        ctx.replace_file(&temp_path, path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp_path);
     }
-    result
+    result?;
+    let mut warnings = Vec::new();
+    if let Err(error) = sync_parent(path) {
+        warnings.push(format!(
+            "{}: the directory was not synced after the replace",
+            error.code()
+        ));
+    }
+    Ok(warnings)
 }
 
-/// Syncs the directory holding `path`, so the rename survives a power loss (Unix only; Windows
-/// does not sync directories).
+/// Syncs the directory holding `path`, so the rename survives a power loss (Unix only; Windows does not
+/// sync directories).
 fn sync_parent(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -170,6 +195,46 @@ fn sync_parent(path: &Path) -> Result<()> {
         let _ = path;
     }
     Ok(())
+}
+
+/// Object kinds the product itself creates: an export that drops one of them would lose work the user
+/// made, so the save refuses. Other dropped kinds (preserved or foreign ones) are only reported.
+const PRODUCT_KINDS: &[&str] = &[
+    arc_draft::types::POINT,
+    arc_draft::types::LINE,
+    arc_draft::types::RAY,
+    arc_draft::types::CONSTRUCTION_LINE,
+    arc_draft::types::CIRCLE,
+    arc_draft::types::ARC,
+    arc_draft::types::ELLIPSE,
+    arc_draft::types::ELLIPTICAL_ARC,
+    arc_draft::types::POLYLINE,
+    arc_draft::types::SPLINE,
+    arc_draft::types::BLOCK_REF,
+    arc_draft::array::ARRAY,
+];
+
+/// Fails with `db.cmd.export_drops_objects` when the export report drops objects of a kind the product
+/// creates: the detail `kind` names the first such kind and `count` the number dropped in all.
+fn refuse_dropped(report: &arc_io_dxf::loss::LossReport) -> Result<()> {
+    let value = serde_json::to_value(report)
+        .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?;
+    let mut first: Option<String> = None;
+    let mut count = 0_u64;
+    for item in value["items"].as_array().into_iter().flatten() {
+        let kind = item["record_kind"].as_str().unwrap_or_default();
+        if item["outcome"] != "dropped" || !PRODUCT_KINDS.contains(&kind) {
+            continue;
+        }
+        count += item["arguments"]["count"].as_u64().unwrap_or(1);
+        first.get_or_insert_with(|| kind.to_owned());
+    }
+    match first {
+        Some(kind) => Err(Error::new(codes::EXPORT_DROPS_OBJECTS)
+            .with_detail("kind", kind)
+            .with_detail("count", count.to_string())),
+        None => Ok(()),
+    }
 }
 
 /// Refuses a DWG target: DWG writing is not available yet. A name ending in `.dwg` counts, even
@@ -224,7 +289,8 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
         arc_io_dxf::write(&exported.drawing, &mut options)?
     };
     ctx.checkpoint()?;
-    write_atomic(ctx, Path::new(&p.path), &output.bytes)?;
+    refuse_dropped(&exported.report)?;
+    let warnings = write_atomic(ctx, Path::new(&p.path), &output.bytes)?;
     // The file is written: record the handles it now holds for objects that had none.
     let new: Vec<_> = exported
         .handles
@@ -250,6 +316,7 @@ fn save_drawing(ctx: &mut Context<'_>, p: SaveParams) -> Result<SaveResult> {
             new.len() as u64
         },
         fingerprint: fingerprint.to_braced(),
+        warnings,
         report: serde_json::to_value(&report)
             .map_err(|_| Error::new(arc_command::error::codes::RESULT_INVALID))?,
     })

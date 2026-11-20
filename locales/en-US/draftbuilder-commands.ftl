@@ -309,3 +309,7 @@ db-cmd-modify-array-rect-label = Rectangular array
 db-cmd-modify-array-row-spacing = Specify distance between rows:
 db-cmd-modify-array-rows = Enter number of rows:
 db-cmd-modify-array-total-angle = Specify the angle filled by the items <360>:
+db-cmd-target-read-only = The target file is read-only and was not replaced.
+db-cmd-export-drops-objects = The drawing has objects that the DXF export cannot write yet (kind {$kind}, count {$count}); nothing was written.
+db-cmd-array-dependent = Another entity refers to a source of the array and is not part of it.
+db-cmd-array-owner-mixed = The sources of the array are not all in one space or block definition.

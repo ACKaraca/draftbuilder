@@ -4,8 +4,10 @@
 //! first point counterclockwise (in the direction of increasing parameter) to the second is removed.
 //! Splitting at one point keeps both parts.
 //!
-//! The first part keeps the identifier when it has the kind of the entity; the other parts are new
-//! entities with the entity's layer and appearance (see [`super::replace_with_pieces`]).
+//! The first part of the entity's own kind keeps the identifier; the other parts are new entities beside
+//! it, with the entity's layer and stored fields (see [`super::replace_with_pieces`]). Two points closer
+//! than the tolerance are one point and are refused. A point at an end of an open entity splits nothing and
+//! is refused as well: nothing is reported as broken.
 
 use arc_base::math::Point2;
 use arc_base::{Error, Result, Tolerance};
@@ -58,18 +60,39 @@ fn run(ctx: &mut Context<'_>, p: BreakParams) -> Result<Changed> {
     let id = ids[0];
     let curve = super::required_curve(&snapshot, id)?;
     let tolerance = Tolerance::DEFAULT;
-    let first = curve
-        .closest_point(Point2::new(p.first[0], p.first[1]), &tolerance)?
-        .parameter;
+    if !p.first.iter().all(|v| v.is_finite())
+        || !p.second.unwrap_or([0.0, 0.0]).iter().all(|v| v.is_finite())
+    {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "first"));
+    }
+    let first_foot = curve.closest_point(Point2::new(p.first[0], p.first[1]), &tolerance)?;
+    // A point at an end of an open curve splits nothing: it is refused rather than reported as a break.
+    let at_end = |point: Point2| -> bool {
+        !curve.is_closed()
+            && [curve.start_point(), curve.end_point()]
+                .into_iter()
+                .flatten()
+                .any(|end| (end - point).norm() <= tolerance.linear)
+    };
+    if at_end(first_foot.point) {
+        return Err(Error::new(codes::PICK_INVALID)
+            .with_detail("reason", "at_end")
+            .with_detail("field", "first"));
+    }
     let pieces: Vec<Curve2> = match p.second {
-        None => split_at_parameters(&curve, &[first], &tolerance)?,
+        None => split_at_parameters(&curve, &[first_foot.parameter], &tolerance)?,
         Some(second) => {
-            let other = curve
-                .closest_point(Point2::new(second[0], second[1]), &tolerance)?
-                .parameter;
-            if (other - first).abs() <= 0.0 {
+            let other_foot = curve.closest_point(Point2::new(second[0], second[1]), &tolerance)?;
+            // Two points closer than the tolerance are one point, so there is no part between them.
+            if (other_foot.point - first_foot.point).norm() <= tolerance.linear {
                 return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "second"));
             }
+            if at_end(other_foot.point) {
+                return Err(Error::new(codes::PICK_INVALID)
+                    .with_detail("reason", "at_end")
+                    .with_detail("field", "second"));
+            }
+            let (first, other) = (first_foot.parameter, other_foot.parameter);
             let (lo, hi) = if first <= other {
                 (first, other)
             } else {

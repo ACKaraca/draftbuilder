@@ -1,13 +1,14 @@
 //! OFFSET (`draftbuilder.modify.offset`, typed `OFFSET`, alias `O`): parallel copies of entities at a
 //! distance. The side is given by a point: the copy lies on the side of that point (to the left of the
 //! direction of travel when the point is on the left), or the distance is the distance of the
-//! `through` point from each entity. Polyline corners close by extension (a miter join with a large
-//! limit). The copies are new entities on the layer and with the appearance of their source. With
-//! `erase_source` the sources are erased after the copies are made.
+//! `through` point from each entity. The copies are new entities on the layer and with the appearance of
+//! their source. With `erase_source` the sources are erased after the copies are made.
 //!
-//! Copies of an object that the offset splits into several curves are one polyline when they join
-//! end to end, and otherwise one entity each. The last distance is not remembered between commands,
-//! and the repeated offset from the last result is not built.
+//! Polyline corners are mitered up to [`MITER_LIMIT`] times the distance and beveled beyond it. Copies of
+//! an object that the offset splits into several curves are one polyline when they join end to end, and
+//! otherwise one entity each. A side point on the entity is refused, since it picks no side. Rays and
+//! construction lines offset through their own parallel constructions. The last distance is not remembered
+//! between commands, and the repeated offset from the last result is not built.
 
 use arc_base::math::Point2;
 use arc_base::{Error, Result, Tolerance};
@@ -25,8 +26,10 @@ use super::{
 use crate::draw::create::{Creator, done, from_meters, machine};
 use crate::error::{Message, codes};
 
-/// The miter limit of a polyline corner: large enough that corners close by extension.
-const CORNER_LIMIT: f64 = 1_000.0;
+/// The miter limit of a polyline corner, in units of the offset distance: a corner whose miter point lies
+/// farther than this from the corner is beveled (its two offset ends are joined by a chord), so a very sharp
+/// corner does not throw a long spike.
+const MITER_LIMIT: f64 = 4.0;
 
 /// Parameters of `draftbuilder.modify.offset`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -90,17 +93,27 @@ fn signed_distance(
     let tangent = curve.tangent(foot.parameter);
     let offset = side - foot.point;
     let left = offset.x * -tangent.y + offset.y * tangent.x;
+    // A side point on the curve picks no side: it is refused rather than silently choosing one.
+    if left.abs() <= tolerance.linear {
+        return Err(Error::new(codes::PICK_INVALID)
+            .with_detail("reason", "on_curve")
+            .with_detail("field", "side"));
+    }
     Ok(if left < 0.0 { -distance } else { distance })
 }
 
 /// The copies of one entity's curve at the signed distance, as curves.
 fn pieces(curve: &Curve2, distance: f64, ctx: &Context<'_>) -> Result<Vec<Curve2>> {
+    // Rays and lines are unbounded: their parallel copy is the geometry function of their own kind.
+    match curve {
+        Curve2::Ray(ray) => return Ok(vec![Curve2::Ray(ray.offset(distance)?)]),
+        Curve2::Line(line) => return Ok(vec![Curve2::Line(line.offset(distance)?)]),
+        _ => {}
+    }
     let composites: Vec<Composite2> = arc_geom::offset(
         curve,
         distance,
-        JoinStyle::Miter {
-            limit: CORNER_LIMIT,
-        },
+        JoinStyle::Miter { limit: MITER_LIMIT },
         &Tolerance::DEFAULT,
         ctx.limits(),
     )?;

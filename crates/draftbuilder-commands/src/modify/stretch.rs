@@ -10,8 +10,10 @@
 //!   arc moves as a whole.
 //!
 //! Other kinds that the window crosses (circles, texts, dimensions, hatches and the rest) are refused
-//! with `db.cmd.stretch_unsupported`: which of their points move is not defined for them. Entities on a
-//! locked layer that the window touches are refused with `draft.layer.locked`.
+//! with `db.cmd.stretch_unsupported`: which of their points move is not defined for them. The selection
+//! includes locked entities, and a locked entity that the window moves or crosses is refused with
+//! `draft.layer.locked`, so no joint is torn silently. An arc whose stretched form would turn the other way
+//! is refused (reason `direction`) rather than stored reversed. Non-finite inputs are refused.
 
 use arc_base::math::Point2;
 use arc_base::{Error, ObjectId, Result};
@@ -129,6 +131,13 @@ fn stretched(key: &str, curve: &Curve2, window: [Point2; 2], d: Point2) -> Resul
             let new_start = moved(start);
             let new_end = moved(end);
             let arc = arc_through(new_start, middle, new_end)?;
+            // The arc through the moved ends turns the way the original did, or it is refused: a stored arc
+            // with the opposite sweep would be the reversed entity.
+            if arc.sweep().signum() != a.sweep().signum() {
+                return Err(Error::new(codes::STRETCH_UNSUPPORTED)
+                    .with_detail("kind", key.to_owned())
+                    .with_detail("reason", "direction"));
+            }
             Ok(Some(Curve2::Arc(arc)))
         }
         _ => Err(Error::new(codes::STRETCH_UNSUPPORTED).with_detail("kind", key.to_owned())),
@@ -141,14 +150,20 @@ fn run(ctx: &mut Context<'_>, p: StretchParams) -> Result<Changed> {
         (None, Some(b), Some(t)) => [t[0] - b[0], t[1] - b[1]],
         _ => return Err(Error::new(codes::PARAMS_CONFLICT).with_detail("field", "displacement")),
     };
+    let finite = |p: [f64; 2]| p.iter().all(|v| v.is_finite());
+    if !(finite(p.first) && finite(p.second) && finite(displacement)) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "window"));
+    }
     let snapshot = ctx.snapshot().clone();
     let space = crate::model_space(&snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
     let window = [
         Point2::new(p.first[0], p.first[1]),
         Point2::new(p.second[0], p.second[1]),
     ];
+    // Locked entities are selected too: a moved or crossed locked entity is refused below, so the
+    // command never tears a joint silently by leaving a locked neighbour where it was.
     let options = Options {
-        include_locked: false,
+        include_locked: true,
     };
     let whole = methods::select_window(&snapshot, space, window, &options)?.ids;
     let crossed = methods::select_crossing(&snapshot, space, window, &options)?.ids;
@@ -156,6 +171,7 @@ fn run(ctx: &mut Context<'_>, p: StretchParams) -> Result<Changed> {
         .into_iter()
         .filter(|id| !whole.contains(id))
         .collect();
+    refuse_locked(&snapshot, &whole)?;
     refuse_locked(&snapshot, &partly)?;
     let mut planned: Vec<(ObjectId, Curve2)> = Vec::new();
     for id in &partly {
@@ -170,7 +186,6 @@ fn run(ctx: &mut Context<'_>, p: StretchParams) -> Result<Changed> {
             planned.push((*id, new));
         }
     }
-    refuse_locked(&snapshot, &whole)?;
     transform_entities(ctx, &whole, translation(displacement[0], displacement[1]))?;
     for (id, curve) in &planned {
         replace_geometry(ctx, *id, curve)?;

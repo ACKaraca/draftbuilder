@@ -10,10 +10,14 @@
 //! continuation: a segment or a ray to its line, an arc to its circle, an elliptical arc to its
 //! ellipse, a polyline to the lines of its segments (a spline stays as it is).
 //!
-//! A target that keeps one part keeps its identifier when the part has its kind; a target that
-//! splits into two (a pick between two edges of a line) keeps the first part and creates the second
-//! with the target's layer and appearance; a target that changes kind is replaced by new entities
-//! and erased. A target on a locked layer is refused with `draft.layer.locked`.
+//! Several targets are processed in order, each in a savepoint, against the edges as they were when the
+//! command started. A target that cannot be processed (no intersection, a locked layer) is rolled back and
+//! listed in `skipped` with its error code; the command succeeds when at least one target changed and fails
+//! with the first error when none did.
+//!
+//! The first part of the target's own kind keeps its identifier; the other parts are created beside it with
+//! the target's layer and stored fields; a target that changes kind is replaced by new entities and erased,
+//! refused when another entity refers to it.
 
 use arc_base::math::Point2;
 use arc_base::{Error, ObjectId, Result, Tolerance};
@@ -21,16 +25,35 @@ use arc_command::{
     Accept, CommandSpec, Context, IdParam, KeywordOption, Prompt, PromptInput, PromptState, Step,
 };
 use arc_doc::Snapshot;
+
 use arc_draft::types::ENTITIES;
 use arc_geom::{Circle2, Curve2, CurveEnd, CurveProject, Line2};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use super::transform::Changed;
 use super::{entities, replace_with_pieces, selection_answer};
 use crate::draw::create::{done, machine};
 use crate::error::{Message, codes};
 use crate::select::{candidates::Options, methods};
+
+/// A target a trim or an extend could not process, with the code of its error.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Skipped {
+    /// The target.
+    pub object: IdParam,
+    /// The error code that stopped it (its own code, for example `geom.edit.no_intersection`).
+    pub reason: String,
+}
+
+/// The result of a trim or an extend: the entities that now hold the changed targets, and the targets that
+/// were skipped.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Edited {
+    /// The entities produced, in target order.
+    pub objects: Vec<IdParam>,
+    /// The targets that could not be processed, in target order, with their reasons.
+    pub skipped: Vec<Skipped>,
+}
 
 /// One target of a trim or an extend: the entity and the point on the part to change.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -109,18 +132,18 @@ fn continuation(curve: &Curve2) -> Result<Vec<Curve2>> {
     })
 }
 
-/// The curves that limit a change of `target`: the edges given, or in quick mode every other visible
-/// object of the model space with a curve; each taken to its continuation when `extend_edges` is set.
-fn boundaries(
+/// The edge curves of a command, each with the curves it stands for (its continuation when
+/// `extend_edges` is set), read once from `snapshot`. The edges are the given entities; in quick mode
+/// they are the visible objects of the model space with a curve.
+fn edge_curves(
     snapshot: &Snapshot,
     edges: &[ObjectId],
-    target: ObjectId,
     quick: bool,
     extend_edges: bool,
-) -> Result<Vec<Curve2>> {
+) -> Result<Vec<(ObjectId, Vec<Curve2>)>> {
     let ids: Vec<ObjectId> = if quick {
-        // The visible objects of the model space: the selection rules (layers off or frozen, invisible
-        // entities) apply; locked objects still limit a change.
+        // The selection rules apply (layers off or frozen, invisible objects are not edges); locked objects
+        // still limit a change.
         let space =
             crate::model_space(snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
         let options = Options {
@@ -130,18 +153,19 @@ fn boundaries(
     } else {
         edges.to_vec()
     };
-    let mut curves = Vec::new();
-    for id in ids.into_iter().filter(|id| *id != target) {
+    let mut out = Vec::new();
+    for id in ids {
         let Some(curve) = super::curve_of(snapshot, id)? else {
             continue;
         };
-        if extend_edges {
-            curves.extend(continuation(&curve)?);
+        let curves = if extend_edges {
+            continuation(&curve)?
         } else {
-            curves.push(curve);
-        }
+            vec![curve]
+        };
+        out.push((id, curves));
     }
-    Ok(curves)
+    Ok(out)
 }
 
 /// The edges, validated as entities.
@@ -149,6 +173,7 @@ fn edge_ids(ctx: &Context<'_>, p: &EdgeParams) -> Result<Vec<ObjectId>> {
     entities(ctx.snapshot(), ctx.limits(), &p.edges)
 }
 
+/// The targets and their pick points, validated as entities; every target is a different entity.
 fn target_ids(ctx: &Context<'_>, p: &EdgeParams) -> Result<Vec<(ObjectId, Point2)>> {
     let list: Vec<IdParam> = p.targets.iter().map(|t| t.object).collect();
     let ids = entities(ctx.snapshot(), ctx.limits(), &list)?;
@@ -162,51 +187,100 @@ fn target_ids(ctx: &Context<'_>, p: &EdgeParams) -> Result<Vec<(ObjectId, Point2
         .collect())
 }
 
-fn trim_run(ctx: &mut Context<'_>, p: EdgeParams) -> Result<Changed> {
+/// Trims one target: the stretch containing the pick, between the nearest intersections with `limits`.
+fn trim_one(
+    ctx: &mut Context<'_>,
+    id: ObjectId,
+    curve: &Curve2,
+    pick: Point2,
+    limits: &[Curve2],
+) -> Result<Vec<ObjectId>> {
+    let tolerance = Tolerance::DEFAULT;
+    let at = curve.closest_point(pick, &tolerance)?.parameter;
+    let parts = arc_geom::trim(curve, limits, at, &tolerance)?;
+    replace_with_pieces(ctx, id, &parts)
+}
+
+/// Extends one target at the end nearest the pick, to the nearest of `limits` beyond it.
+fn extend_one(
+    ctx: &mut Context<'_>,
+    id: ObjectId,
+    curve: &Curve2,
+    pick: Point2,
+    limits: &[Curve2],
+) -> Result<Vec<ObjectId>> {
+    let tolerance = Tolerance::DEFAULT;
+    let (Some(start), Some(end)) = (curve.start_point(), curve.end_point()) else {
+        return Err(Error::new(codes::GEOMETRY_UNSUPPORTED).with_detail("id", id.to_string()));
+    };
+    let end_kind = if (start - pick).norm() <= (end - pick).norm() {
+        CurveEnd::Start
+    } else {
+        CurveEnd::End
+    };
+    let extended = arc_geom::extend(curve, end_kind, limits, &tolerance)?;
+    replace_with_pieces(ctx, id, &[extended])
+}
+
+/// Runs trim (or extend) on every target of a command, each in a savepoint. The edges are the curves they
+/// were at the start of the command, so the order of the targets does not change what they cut. A target
+/// that cannot be processed is rolled back and listed in `skipped` with its error code; the command succeeds
+/// when at least one target changed, and fails with the first error when none did.
+fn edit_targets(ctx: &mut Context<'_>, p: EdgeParams, extend: bool) -> Result<Edited> {
     let edges = edge_ids(ctx, &p)?;
     let targets = target_ids(ctx, &p)?;
     let quick = p.edges.is_empty();
-    let mut out = Vec::new();
+    let start = ctx.snapshot().clone();
+    let edge_sets = edge_curves(&start, &edges, quick, p.extend_edges)?;
+    let mut objects = Vec::new();
+    let mut skipped = Vec::new();
+    let mut first_error: Option<Error> = None;
     for (id, pick) in targets {
-        let snapshot = ctx.snapshot().clone();
-        let curve = super::required_curve(&snapshot, id)?;
-        let limits = boundaries(&snapshot, &edges, id, quick, p.extend_edges)?;
-        let tolerance = Tolerance::DEFAULT;
-        let at = curve.closest_point(pick, &tolerance)?.parameter;
-        let parts = arc_geom::trim(&curve, &limits, at, &tolerance)?;
-        out.extend(replace_with_pieces(ctx, id, &parts)?);
+        let curve = super::required_curve(&start, id)?;
+        let limits: Vec<Curve2> = edge_sets
+            .iter()
+            .filter(|(edge, _)| *edge != id)
+            .flat_map(|(_, curves)| curves.iter().cloned())
+            .collect();
+        let savepoint = ctx.txn()?.savepoint()?;
+        let outcome = if extend {
+            extend_one(ctx, id, &curve, pick, &limits)
+        } else {
+            trim_one(ctx, id, &curve, pick, &limits)
+        };
+        match outcome {
+            Ok(ids) => {
+                ctx.txn()?.release(&savepoint)?;
+                objects.extend(ids);
+            }
+            Err(error) => {
+                ctx.txn()?.rollback_to(&savepoint)?;
+                skipped.push(Skipped {
+                    object: IdParam(id),
+                    reason: error.code().to_owned(),
+                });
+                first_error.get_or_insert(error);
+            }
+        }
     }
-    ctx.set_selection(out.clone())?;
-    Ok(Changed {
-        objects: out.into_iter().map(IdParam).collect(),
+    if objects.is_empty() {
+        return Err(first_error.unwrap_or_else(|| {
+            Error::new(codes::PARAMS_CONFLICT).with_detail("field", "targets")
+        }));
+    }
+    ctx.set_selection(objects.clone())?;
+    Ok(Edited {
+        objects: objects.into_iter().map(IdParam).collect(),
+        skipped,
     })
 }
 
-fn extend_run(ctx: &mut Context<'_>, p: EdgeParams) -> Result<Changed> {
-    let edges = edge_ids(ctx, &p)?;
-    let targets = target_ids(ctx, &p)?;
-    let quick = p.edges.is_empty();
-    let mut out = Vec::new();
-    for (id, pick) in targets {
-        let snapshot = ctx.snapshot().clone();
-        let curve = super::required_curve(&snapshot, id)?;
-        let limits = boundaries(&snapshot, &edges, id, quick, p.extend_edges)?;
-        let tolerance = Tolerance::DEFAULT;
-        let (Some(start), Some(end)) = (curve.start_point(), curve.end_point()) else {
-            return Err(Error::new(codes::GEOMETRY_UNSUPPORTED).with_detail("id", id.to_string()));
-        };
-        let end_kind = if (start - pick).norm() <= (end - pick).norm() {
-            CurveEnd::Start
-        } else {
-            CurveEnd::End
-        };
-        let extended = arc_geom::extend(&curve, end_kind, &limits, &tolerance)?;
-        out.extend(replace_with_pieces(ctx, id, &[extended])?);
-    }
-    ctx.set_selection(out.clone())?;
-    Ok(Changed {
-        objects: out.into_iter().map(IdParam).collect(),
-    })
+fn trim_run(ctx: &mut Context<'_>, p: EdgeParams) -> Result<Edited> {
+    edit_targets(ctx, p, false)
+}
+
+fn extend_run(ctx: &mut Context<'_>, p: EdgeParams) -> Result<Edited> {
+    edit_targets(ctx, p, true)
 }
 
 /// The number of answers of the keyword `extend` to the edges prompt (an odd number means the edges

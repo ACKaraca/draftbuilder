@@ -155,26 +155,39 @@ fn workflow_w01_draw_array_round_offset_trim_undo_redo_save_and_reopen() {
     );
     assert_eq!(kinds(&env)["core.draft.line"], 2);
 
-    // Step 6: save as DXF, reopen, and compare what is there. DXF has no array entity in the
-    // foundation's export, so the array is dropped by the save and reported as such; the block that
-    // holds the hole's content is kept.
-    let before = kinds(&env);
-    let path = env.dir.join("w01.dxf");
-    draftbuilder_commands::save_document(&env.document, &path, &env.session).unwrap();
-    let saved = env.run(
-        "draftbuilder.drawing.save_dxf",
-        json!({"path": env.path("w01-report.dxf")}),
+    // Step 6: the save. The drawing holds an array, which the DXF export cannot write yet, so the save is
+    // refused and nothing is written (the round trip of a drawing without arrays is the next test).
+    let refused = env
+        .invoke(
+            "draftbuilder.drawing.save",
+            json!({"path": env.path("w01.dxf")}),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), "db.cmd.export_drops_objects", "{refused:?}");
+    assert!(!env.dir.join("w01.dxf").exists());
+    // Not covered by this workflow (not built): the team template (step 1), the running snaps and
+    // polar tracking (step 2), the snap-from offsets of the hole (step 4), and the fillet of two
+    // lines by pick (the polyline form is used); see docs/architecture/overview.md.
+}
+
+#[test]
+fn a_drawing_without_arrays_saves_as_dxf_and_reopens_with_the_same_entities() {
+    let mut env = Env::new();
+    env.run("draftbuilder.drawing.new", json!({"unit": "meter"}));
+    env.run(
+        "draftbuilder.draw.polyline",
+        json!({"vertices": [{"point": [0.0, 0.0]}, {"point": [20.0, 0.0]}, {"point": [20.0, 10.0]}],
+               "close": true}),
     );
-    let dropped: Vec<&str> = saved["report"]["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|i| i["reason"] == "draft.dxf.export_unmapped")
-        .filter_map(|i| i["arguments"]["kind"].as_str())
-        .collect();
-    assert_eq!(dropped, vec!["core.draft.array"], "{saved}");
+    env.run(
+        "draftbuilder.draw.circle",
+        json!({"shape": {"mode": "center", "center": [5.0, 5.0], "radius": 1.0}}),
+    );
+    let before = kinds(&env);
+    let path = env.path("plain.dxf");
+    env.run("draftbuilder.drawing.save", json!({"path": path.clone()}));
     let reopened = draftbuilder_commands::open_document(
-        &path,
+        std::path::Path::new(&path),
         arc_doc::DocumentConfig {
             workers: 0,
             ..arc_doc::DocumentConfig::default()
@@ -190,13 +203,5 @@ fn workflow_w01_draw_array_round_offset_trim_undo_redo_save_and_reopen() {
             after.insert(*key, n);
         }
     }
-    let mut expected = before.clone();
-    expected.remove("core.draft.array");
-    assert_eq!(
-        after, expected,
-        "the reopened drawing has the same entities by kind, but no array"
-    );
-    // Not covered by this workflow (not built): the team template (step 1), the running snaps and
-    // polar tracking (step 2), the snap-from offsets of the hole (step 4), and the fillet of two
-    // lines by pick (the polyline form is used); see docs/architecture/overview.md.
+    assert_eq!(after, before);
 }

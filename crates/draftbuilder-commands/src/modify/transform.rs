@@ -151,7 +151,8 @@ pub struct MoveParams {
 }
 
 /// Parameters of `draftbuilder.modify.copy`: copies of the entities, each displaced by the vector
-/// from `base` to one target point.
+/// from `base` to one target point. The objects times the targets must fit the session's array-length
+/// limit, and every point must be finite; both are checked before the first copy.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CopyParams {
@@ -487,7 +488,20 @@ fn copy_check(state: &PromptState<'_>, _: &Prompt, input: &arc_command::PromptIn
 }
 
 fn copy_run(ctx: &mut Context<'_>, p: CopyParams) -> Result<Changed> {
+    // Everything is checked before the first copy: the points are finite, and the copies (objects times
+    // targets) stay within the session's array-length limit.
+    if !p.base.iter().all(|v| v.is_finite()) || !p.targets.iter().flatten().all(|v| v.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "targets"));
+    }
     let ids = entities(ctx.snapshot(), ctx.limits(), &p.objects)?;
+    let limit = usize::try_from(ctx.limits().array_length).unwrap_or(usize::MAX);
+    if ids
+        .len()
+        .checked_mul(p.targets.len())
+        .is_none_or(|copies| copies > limit)
+    {
+        return Err(Error::new(codes::LIMIT_EXCEEDED).with_detail("limit", "array_length"));
+    }
     let mut out = Vec::new();
     for target in &p.targets {
         let copies = copy_entities(ctx, &ids)?;

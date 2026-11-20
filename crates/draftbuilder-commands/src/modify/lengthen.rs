@@ -53,6 +53,9 @@ fn run(ctx: &mut Context<'_>, p: LengthenParams) -> Result<Changed> {
     let snapshot = ctx.snapshot().clone();
     refuse_locked(&snapshot, &ids)?;
     let id = ids[0];
+    if !p.pick.iter().all(|v| v.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "pick"));
+    }
     let curve = super::required_curve(&snapshot, id)?;
     let pick = Point2::new(p.pick[0], p.pick[1]);
     let (Some(start), Some(end)) = (curve.start_point(), curve.end_point()) else {
@@ -74,6 +77,10 @@ fn run(ctx: &mut Context<'_>, p: LengthenParams) -> Result<Changed> {
             let length = a.radius() * a.sweep().abs();
             let wanted = new_length(length, p)?;
             let sweep = a.sweep().signum() * wanted / a.radius();
+            if sweep.abs() >= std::f64::consts::TAU - Tolerance::DEFAULT.angular {
+                // A sweep of a full turn or more is a circle, which an arc cannot be.
+                return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "value"));
+            }
             let end_angle = a.start_angle() + a.sweep();
             let near_end = (end - pick).norm() <= (start - pick).norm();
             if near_end {

@@ -206,13 +206,12 @@ impl Creator {
         Ok(id)
     }
 
-    /// Adds an entity of `key` created from `values` as they are (its layer, its draw order and its
-    /// fields are the caller's), owned by `owner`. Used for the pieces of a changed geometry, whose
-    /// kind may differ from the source's.
+    /// Adds an entity of `key` created from `values` as they are, owned by `owner`, with a draw order above
+    /// the entities created before it.
     ///
     /// # Errors
     ///
-    /// The errors of the transaction, and `db.cmd.limit_exceeded` when the draw order is spent.
+    /// `db.cmd.limit_exceeded` when the draw order is spent, and the errors of the transaction.
     pub(crate) fn add_values(
         &mut self,
         ctx: &mut Context<'_>,
@@ -220,16 +219,31 @@ impl Creator {
         owner: Option<ObjectId>,
         values: Vec<Option<Value>>,
     ) -> Result<ObjectId> {
-        let mut values = values;
-        set(
-            &mut values,
-            entity::DRAW_ORDER,
-            Some(Value::I64(self.next_order)),
-        );
+        let order = self.next_order;
         self.next_order = self
             .next_order
             .checked_add(ORDER_STEP)
             .ok_or_else(|| Error::new(codes::LIMIT_EXCEEDED))?;
+        self.add_values_at(ctx, key, owner, values, order)
+    }
+
+    /// Adds an entity of `key` created from `values` as they are (its layer, its draw order and its
+    /// fields are the caller's), owned by `owner`, with the draw order `order`. Used for the pieces of a
+    /// changed geometry, whose kind may differ from the source's.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the transaction.
+    pub(crate) fn add_values_at(
+        &mut self,
+        ctx: &mut Context<'_>,
+        key: &str,
+        owner: Option<ObjectId>,
+        values: Vec<Option<Value>>,
+        order: i64,
+    ) -> Result<ObjectId> {
+        let mut values = values;
+        set(&mut values, entity::DRAW_ORDER, Some(Value::I64(order)));
         let id: ObjectId = ctx.new_id();
         let header = Header {
             owner,

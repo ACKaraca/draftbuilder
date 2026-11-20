@@ -5,9 +5,14 @@
 //! `unjoined`. The fuzz distance is the largest gap that still counts as touching (default: the
 //! drawing tolerance).
 //!
-//! The joined entity keeps the identifier of the first entity of its chain when it keeps the kind, and
-//! takes the layer and appearance of that entity; the other entities of the chain are erased.
+//! The joined entity is built from the chain in its order. A segment results only when the pieces run the
+//! same way (no fold, no overlap); an arc only when the pieces lie on one circle and turn the same way; a
+//! chain that does neither becomes its exact polyline, so no length is lost. A single open polyline whose
+//! ends touch is closed. The entity of the chain with the lowest position in the selection keeps the
+//! identifier when the result has its kind (otherwise the result is a new entity), takes the layer and
+//! appearance of that entity, and the other members of the chain are erased.
 
+use arc_base::math::Vector2;
 use arc_base::{Error, ObjectId, Result, Tolerance};
 use arc_command::{CommandSpec, Context, IdParam};
 use arc_geom::{Arc2, Circle2, Composite2, Curve2, Segment2, join};
@@ -45,66 +50,84 @@ const DESCRIPTION: Message = Message {
     message_id: "db-cmd-modify-join-description",
 };
 
-/// The curve of a chain of curves, in the chain's direction, in the simplest kind that represents it;
-/// `None` when the chain has no single representation.
-fn chain_curve(
-    composite: &Composite2,
-    curves: &[Curve2],
-    tolerance: &Tolerance,
-) -> Result<Option<Curve2>> {
-    let all = |f: fn(&Curve2) -> bool| curves.iter().all(f);
-    if all(|c| matches!(c, Curve2::Segment(_))) {
-        let segments: Vec<Segment2> = curves
+/// The curve of a joined chain, built from its pieces in chain order (the composite holds them oriented):
+/// a segment only when the pieces run the same way, so the result is their span with no overlap; an arc
+/// only when the pieces lie on one circle and turn the same way, closing into a circle when they make a
+/// full turn; otherwise the exact polyline of the chain, which keeps every fold and overlap. `None` when a
+/// piece has no polyline form (a spline).
+fn chain_curve(composite: &Composite2, tolerance: &Tolerance) -> Option<Curve2> {
+    let pieces = composite.curves();
+    if pieces.iter().all(|c| matches!(c, Curve2::Segment(_))) && !composite.is_closed() {
+        let directions: Vec<Vector2> = pieces
             .iter()
             .filter_map(|c| match c {
-                Curve2::Segment(s) => Some(*s),
+                Curve2::Segment(s) => Some(s.end() - s.start()),
                 _ => None,
             })
             .collect();
-        let first = segments[0];
-        let direction = first.end() - first.start();
-        let straight = segments.iter().all(|s| {
-            let d = s.end() - s.start();
-            let cross = direction.x * d.y - direction.y * d.x;
-            cross.abs() <= tolerance.angular * direction.norm() * d.norm()
-        });
-        if straight && !composite.is_closed() {
-            return Ok(Some(Curve2::Segment(Segment2::new(
-                composite.start_point(),
-                composite.end_point(),
-            )?)));
+        let same_way = directions
+            .windows(2)
+            .all(|pair| pair[0].x * pair[1].x + pair[0].y * pair[1].y > 0.0);
+        if same_way
+            && let Ok(segment) = Segment2::new(composite.start_point(), composite.end_point())
+        {
+            return Some(Curve2::Segment(segment));
         }
     }
-    if all(|c| matches!(c, Curve2::Arc(_))) {
-        let arcs: Vec<Arc2> = curves
-            .iter()
-            .filter_map(|c| match c {
-                Curve2::Arc(a) => Some(*a),
-                _ => None,
-            })
-            .collect();
+    let arcs: Vec<Arc2> = pieces
+        .iter()
+        .filter_map(|c| match c {
+            Curve2::Arc(a) => Some(*a),
+            _ => None,
+        })
+        .collect();
+    if arcs.len() == pieces.len() && !arcs.is_empty() {
         let first = arcs[0];
         let coaxial = arcs.iter().all(|a| {
             (a.center() - first.center()).norm() <= tolerance.linear
                 && (a.radius() - first.radius()).abs() <= tolerance.linear
         });
-        if coaxial {
-            let sweep: f64 = arcs.iter().map(Arc2::sweep).sum();
+        let turns_alike = arcs
+            .windows(2)
+            .all(|pair| pair[0].sweep().signum() == pair[1].sweep().signum());
+        let total: f64 = arcs.iter().map(Arc2::sweep).sum();
+        if coaxial && turns_alike {
             if composite.is_closed()
-                && (sweep.abs() - std::f64::consts::TAU).abs() <= tolerance.angular
+                && (total.abs() - std::f64::consts::TAU).abs() <= tolerance.angular
             {
-                return Ok(Some(Curve2::Circle(Circle2::new(
-                    first.center(),
-                    first.radius(),
-                )?)));
+                return Circle2::new(first.center(), first.radius())
+                    .ok()
+                    .map(Curve2::Circle);
             }
-            if !composite.is_closed() {
-                let arc = Arc2::new(first.center(), first.radius(), arcs[0].start_angle(), sweep)?;
-                return Ok(Some(Curve2::Arc(arc)));
+            if !composite.is_closed() && total.abs() < std::f64::consts::TAU - tolerance.angular {
+                return Arc2::new(first.center(), first.radius(), first.start_angle(), total)
+                    .ok()
+                    .map(Curve2::Arc);
             }
         }
     }
-    Ok(composite.to_polyline().map(Curve2::Polyline))
+    composite.to_polyline().map(Curve2::Polyline)
+}
+
+/// The polyline an open polyline becomes when its ends touch: the closing segment is the segment from
+/// its last vertex (kept bulge) to the first, so the duplicate last vertex is dropped. `None` for any
+/// other curve, or an open polyline whose ends do not touch.
+fn closed_polyline(curve: &Curve2, tolerance: &Tolerance) -> Option<Curve2> {
+    let Curve2::Polyline(polyline) = curve else {
+        return None;
+    };
+    if polyline.is_closed() {
+        return None;
+    }
+    let vertices = polyline.vertices();
+    let (first, last) = (vertices.first()?, vertices.last()?);
+    if (first.point - last.point).norm() > tolerance.linear || vertices.len() < 3 {
+        return None;
+    }
+    let kept = vertices[..vertices.len() - 1].to_vec();
+    arc_geom::Polyline2::new(kept, true)
+        .ok()
+        .map(Curve2::Polyline)
 }
 
 fn run(ctx: &mut Context<'_>, p: JoinParams) -> Result<Joined> {
@@ -135,11 +158,23 @@ fn run(ctx: &mut Context<'_>, p: JoinParams) -> Result<Joined> {
     for (composite, indices) in &joined.chains {
         let members: Vec<usize> = indices.clone();
         if members.len() < 2 {
-            unjoined.extend(members.iter().map(|i| with_curves[*i]));
+            // A single open polyline whose ends touch is closed in place.
+            match members
+                .first()
+                .and_then(|i| closed_polyline(&curves[*i], &tolerance))
+            {
+                Some(closed) => {
+                    out.extend(replace_with_pieces(
+                        ctx,
+                        with_curves[members[0]],
+                        &[closed],
+                    )?);
+                }
+                None => unjoined.extend(members.iter().map(|i| with_curves[*i])),
+            }
             continue;
         }
-        let chain: Vec<Curve2> = members.iter().map(|i| curves[*i].clone()).collect();
-        let Some(result) = chain_curve(composite, &chain, &tolerance)? else {
+        let Some(result) = chain_curve(composite, &tolerance) else {
             unjoined.extend(members.iter().map(|i| with_curves[*i]));
             continue;
         };

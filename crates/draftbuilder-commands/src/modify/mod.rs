@@ -14,7 +14,8 @@
 //! - Geometry changes that keep the kind of an entity replace its geometry in place: the identifier
 //!   and the handle stay. A result of another kind, or a count that differs from the input, creates
 //!   entities and erases the inputs they replace; the new entities take the layer and every
-//!   appearance field of their source, with a new draw order above the drawing's others.
+//!   appearance field of their source; the pieces of a split keep the identifier on the first piece of the
+//!   source's kind and take draw orders beside the source (see [`replace_with_pieces`]).
 //! - An entity on a locked layer is refused with the foundation's `draft.layer.locked`, which the
 //!   foundation's own transform applies; the product's writes apply the same rule
 //!   ([`crate::layer::refuse_locked_entity`]).
@@ -226,13 +227,47 @@ pub(crate) fn copy_entities(ctx: &mut Context<'_>, ids: &[ObjectId]) -> Result<V
     Ok(creator.into_ids())
 }
 
-/// Erases the entities `ids` (already validated as entities): the transaction deletes them and the
-/// foundation's delete rules run.
+/// Fails with `db.cmd.erase_dependent` (detail `id`, the referring entity) when an entity outside `ids`
+/// refers to one of `ids`: a dimension, a hatch boundary, a path array. Identifiers erased by the same call
+/// are not dependents of each other.
 ///
 /// # Errors
 ///
-/// The errors of the transaction and of the delete rules.
+/// `db.cmd.erase_dependent`.
+pub(crate) fn refuse_dependents(snapshot: &Snapshot, ids: &[ObjectId]) -> Result<()> {
+    refuse_referrers(snapshot, ids, codes::ERASE_DEPENDENT)
+}
+
+/// Fails with `code` (detail `id`, the referring entity) when an entity outside `ids` refers to one of them.
+///
+/// # Errors
+///
+/// `code`.
+pub(crate) fn refuse_referrers(
+    snapshot: &Snapshot,
+    ids: &[ObjectId],
+    code: arc_base::ErrorCode,
+) -> Result<()> {
+    for id in ids {
+        for referrer in snapshot.referrers(*id) {
+            let source = referrer.source;
+            if !ids.contains(&source) && entity_key(snapshot, source).is_ok() {
+                return Err(Error::new(code).with_detail("id", source.to_string()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Erases the entities `ids` (already validated as entities and checked for locked layers by the caller).
+/// Every path that erases an entity goes through here: an entity that another entity refers to is refused
+/// first, so no dependent loses its geometry (a circle a hatch boundary names is not broken silently).
+///
+/// # Errors
+///
+/// `db.cmd.erase_dependent`, and the errors of the transaction and of the delete rules.
 pub(crate) fn erase_entities(ctx: &mut Context<'_>, ids: &[ObjectId]) -> Result<()> {
+    refuse_dependents(ctx.snapshot(), ids)?;
     let limits = *ctx.limits();
     let txn = ctx.txn()?;
     for id in ids {
@@ -296,15 +331,17 @@ pub(crate) fn key_of_curve(curve: &Curve2) -> &'static str {
     }
 }
 
-/// Makes `pieces` the entities that replace `id`. The first piece replaces the geometry of `id` in
-/// place when its kind is the kind of `id` (the identifier and the handle stay). Every other piece,
-/// and a first piece of another kind, is created with the layer and appearance of `id`; when `id`
-/// is not kept it is erased. No piece erases `id`. Returns the identifiers of the pieces in order.
+/// Makes `pieces` the entities that replace `id`. The identifier and the handle stay with the first piece
+/// of the same kind as `id`, which replaces its geometry in place; every other piece is created. A created
+/// piece of the same kind as `id` copies every stored value of `id` except its geometry (so a polyline's
+/// fields survive a split); a piece of another kind takes the common fields only. Created pieces are owned
+/// like `id` (its space or block) and take draw orders adjacent to `id`'s, after it. When no piece has the
+/// kind of `id`, `id` is erased. Returns the identifiers of the pieces in order.
 ///
 /// # Errors
 ///
-/// `draft.layer.locked` for an entity on a locked layer, and the errors of the transaction and of
-/// the creator.
+/// `draft.layer.locked` for an entity on a locked layer, `db.cmd.erase_dependent` when `id` is erased and
+/// another entity refers to it, and the errors of the transaction and of the creator.
 pub(crate) fn replace_with_pieces(
     ctx: &mut Context<'_>,
     id: ObjectId,
@@ -316,21 +353,34 @@ pub(crate) fn replace_with_pieces(
     let object = snapshot.get(snapshot.resolve(id)?)?;
     let owner = object.header.owner;
     let source = object.values.clone();
+    let order = match source.get(arc_draft::types::entity::DRAW_ORDER) {
+        Some(Some(Value::I64(order))) => *order,
+        _ => 0,
+    };
+    let keeper = pieces.iter().position(|piece| key_of_curve(piece) == key);
     let mut creator = Creator::new(&snapshot)?;
     let mut out = Vec::with_capacity(pieces.len());
-    let mut kept = false;
+    let mut created = 0_i64;
     for (index, piece) in pieces.iter().enumerate() {
-        let piece_key = key_of_curve(piece);
-        if index == 0 && piece_key == key {
+        if Some(index) == keeper {
             replace_geometry(ctx, id, piece)?;
             out.push(id);
-            kept = true;
-        } else {
-            let values = appearance_values(&snapshot, piece_key, &source, piece);
-            out.push(creator.add_values(ctx, piece_key, owner, values)?);
+            continue;
         }
+        let piece_key = key_of_curve(piece);
+        let values = if piece_key == key {
+            let mut values = source.clone();
+            if let Some(slot) = values.get_mut(arc_draft::types::entity::KIND) {
+                *slot = Some(Value::Geometry(arc_doc::GeometryBytes(piece.encode())));
+            }
+            values
+        } else {
+            appearance_values(&snapshot, piece_key, &source, piece)
+        };
+        created += 1;
+        out.push(creator.add_values_at(ctx, piece_key, owner, values, order + created)?);
     }
-    if !kept {
+    if keeper.is_none() {
         erase_entities(ctx, &[id])?;
     }
     Ok(out)

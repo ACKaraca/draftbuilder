@@ -175,7 +175,7 @@ fn path_array_refuses_the_path_as_one_of_its_entities() {
 }
 
 #[test]
-fn an_array_with_no_rows_is_refused_by_the_foundation_and_changes_nothing() {
+fn an_array_with_no_rows_is_refused_before_anything_changes() {
     let mut env = Env::new();
     setup(&mut env);
     let source = line(&mut env, [0.0, 0.0], [1.0, 0.0]);
@@ -186,7 +186,7 @@ fn an_array_with_no_rows_is_refused_by_the_foundation_and_changes_nothing() {
                    "row_spacing": 1.0, "column_spacing": 1.0}),
         )
         .unwrap_err();
-    assert!(error.code().starts_with("draft."), "{}", error.code());
+    assert_eq!(error.code(), "db.cmd.value_invalid", "{}", error.code());
     assert_eq!(model_lines(&env), 1);
     assert_eq!(arrays(&env.document.snapshot()).len(), 0);
 }

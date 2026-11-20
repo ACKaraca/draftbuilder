@@ -10,9 +10,13 @@
 //! entity; the items keep the layers of the content.
 //!
 //! The selected entities are moved into the definition, as the foundation's block definition moves
-//! them. An entity that refers to another entity (a dimension, a hatch with a boundary) is refused,
-//! since the reference would not follow the move. A path array refers to its path entity, which must
-//! not be one of the selected entities. Associative editing of an array (ARRAYEDIT) is not built.
+//! them. Before anything changes, the sources must be on unlocked layers, must refer to no entity, must
+//! not be referred to by an entity outside the selection (a dimension, a hatch boundary, another array:
+//! `db.cmd.array_dependent`), and must share one owner, a space or a block definition (`db.cmd.array_owner_mixed`);
+//! the array is created in that owner. The counts are checked at run time: rows and columns (or the count)
+//! are at least one, and the items in all are at most the foundation's limit of 10,000. A path array refers
+//! to its path entity, which must not be one of the selected entities. Associative editing of an array
+//! (ARRAYEDIT) is not built.
 
 use arc_base::math::{Point2, Vector3};
 use arc_base::{Dimension, Error, ObjectId, Result};
@@ -27,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     entities, entity_selection, point, point_answer, refuse_associated_copy, refuse_locked,
-    selection_answer,
+    refuse_referrers, selection_answer,
 };
 use crate::draw::create::{Creator, done, machine};
 use crate::error::{Message, codes};
@@ -153,11 +157,12 @@ fn define(ctx: &mut Context<'_>, objects: &[ObjectId]) -> Result<ObjectId> {
     Ok(block)
 }
 
-/// Creates the array entity for `block` with the layout values `fields`, on the layer of the first
-/// source entity, owned by the model space; validated with the foundation's own rules.
+/// Creates the array entity for `block` in `owner` with the layout values `fields`, on the layer of the
+/// first source entity; validated with the foundation's own rules.
 fn insert(
     ctx: &mut Context<'_>,
     block: ObjectId,
+    owner: ObjectId,
     layer: Option<ObjectId>,
     fields: Vec<(usize, Value)>,
 ) -> Result<ObjectId> {
@@ -172,7 +177,6 @@ fn insert(
     }
     Params::from_values(&check).validate()?;
     let mut creator = Creator::new(&snapshot)?;
-    let space = crate::model_space(&snapshot).ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
     let mut values = types::defaults(snapshot.registry(), ARRAY);
     values[entity::LAYER] = layer.map(Value::Reference);
     values[field::BLOCK] = Some(Value::Reference(block));
@@ -182,27 +186,54 @@ fn insert(
     for (index, value) in kind {
         values[index] = Some(value);
     }
-    creator.add_values(ctx, ARRAY, Some(space), values)
+    creator.add_values(ctx, ARRAY, Some(owner), values)
 }
 
-/// The source entities of an array: validated, locked-checked and free of references to entities.
+/// The sources of an array, checked before anything changes: they are entities on unlocked layers that
+/// refer to no entity, nothing outside them refers to them, they are all owned by one space or block
+/// definition, and a path array's path is not one of them. Returns them with that owner.
 fn sources(
     ctx: &Context<'_>,
     list: &[IdParam],
-    exclude: Option<ObjectId>,
-) -> Result<Vec<ObjectId>> {
+    path: Option<ObjectId>,
+) -> Result<(Vec<ObjectId>, ObjectId)> {
     let snapshot = ctx.snapshot();
     let ids = entities(snapshot, ctx.limits(), list)?;
-    if let Some(path) = exclude
-        && ids.contains(&path)
-    {
+    if path.is_some_and(|path| ids.contains(&path)) {
         return Err(Error::new(codes::PARAMS_CONFLICT).with_detail("field", "path"));
     }
     refuse_locked(snapshot, &ids)?;
     for id in &ids {
         refuse_associated_copy(snapshot, *id)?;
     }
-    Ok(ids)
+    refuse_referrers(snapshot, &ids, codes::ARRAY_DEPENDENT)?;
+    let mut owners = std::collections::BTreeSet::new();
+    for id in &ids {
+        owners.insert(snapshot.get(snapshot.resolve(*id)?)?.header.owner);
+    }
+    if owners.len() != 1 {
+        return Err(Error::new(codes::ARRAY_OWNER_MIXED));
+    }
+    let owner = owners
+        .into_iter()
+        .next()
+        .flatten()
+        .ok_or_else(|| Error::new(codes::NO_MODEL_SPACE))?;
+    Ok((ids, owner))
+}
+
+/// The largest item count of an array, as a whole number the run accepts.
+fn max_items() -> i64 {
+    i64::try_from(arc_draft::array::MAX_ITEMS).unwrap_or(i64::MAX)
+}
+
+/// Fails with `value_invalid` (detail `field`) unless `count` is between one and the largest item count.
+fn check_count(count: i64, field_name: &str) -> Result<()> {
+    if (1..=max_items()).contains(&count) {
+        Ok(())
+    } else {
+        Err(Error::new(codes::VALUE_INVALID).with_detail("field", field_name))
+    }
 }
 
 fn layer_of_first(snapshot: &Snapshot, ids: &[ObjectId]) -> Option<ObjectId> {
@@ -214,12 +245,19 @@ fn layer_of_first(snapshot: &Snapshot, ids: &[ObjectId]) -> Option<ObjectId> {
 }
 
 fn rect_run(ctx: &mut Context<'_>, p: RectParams) -> Result<Arrayed> {
-    let ids = sources(ctx, &p.objects, None)?;
+    check_count(p.rows, "rows")?;
+    check_count(p.columns, "columns")?;
+    let total = p.rows.checked_mul(p.columns).unwrap_or(i64::MAX);
+    if total > max_items() {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "columns"));
+    }
+    let (ids, owner) = sources(ctx, &p.objects, None)?;
     let layer = layer_of_first(ctx.snapshot(), &ids);
     let block = define(ctx, &ids)?;
     let array = insert(
         ctx,
         block,
+        owner,
         layer,
         vec![
             (field::KIND, Value::Enum(0)),
@@ -234,12 +272,17 @@ fn rect_run(ctx: &mut Context<'_>, p: RectParams) -> Result<Arrayed> {
 }
 
 fn polar_run(ctx: &mut Context<'_>, p: PolarParams) -> Result<Arrayed> {
-    let ids = sources(ctx, &p.objects, None)?;
+    check_count(p.count, "count")?;
+    if !p.center.iter().all(|v| v.is_finite()) {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "center"));
+    }
+    let (ids, owner) = sources(ctx, &p.objects, None)?;
     let layer = layer_of_first(ctx.snapshot(), &ids);
     let block = define(ctx, &ids)?;
     let array = insert(
         ctx,
         block,
+        owner,
         layer,
         vec![
             (field::KIND, Value::Enum(1)),
@@ -262,17 +305,23 @@ fn polar_run(ctx: &mut Context<'_>, p: PolarParams) -> Result<Arrayed> {
 }
 
 fn path_run(ctx: &mut Context<'_>, p: PathParams) -> Result<Arrayed> {
-    let ids = sources(ctx, &p.objects, Some(p.path.0))?;
+    let count = p.count.unwrap_or(1);
+    check_count(count, "count")?;
+    if !p.spacing.is_finite() || p.spacing < 0.0 {
+        return Err(Error::new(codes::VALUE_INVALID).with_detail("field", "spacing"));
+    }
+    let (ids, owner) = sources(ctx, &p.objects, Some(p.path.0))?;
     let layer = layer_of_first(ctx.snapshot(), &ids);
     let block = define(ctx, &ids)?;
     let array = insert(
         ctx,
         block,
+        owner,
         layer,
         vec![
             (field::KIND, Value::Enum(2)),
             (field::PATH, Value::Reference(p.path.0)),
-            (field::COUNT, Value::I64(p.count.unwrap_or(1))),
+            (field::COUNT, Value::I64(count)),
             (field::SPACING, Value::F64(p.spacing)),
             (field::ALIGN, Value::Bool(p.align.unwrap_or(true))),
         ],

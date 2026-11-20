@@ -2,10 +2,11 @@
 //! lines and arcs, and a block reference into the entities of its definition, placed by the
 //! reference. Other kinds are refused with `db.cmd.explode_unsupported`, naming the kind.
 //!
-//! Each component keeps the stored values of its source (its appearance and its kind's fields), and
-//! takes the layer and the appearance of the block reference where the definition leaves them to
-//! the reference: an entity on layer `0` takes the reference's layer, and a `ByBlock` appearance
-//! takes the reference's own setting. A block reference is placed by its position, rotation and
+//! Each component keeps the stored values of its source (its appearance and its kind's fields). An entity
+//! on layer `0` takes the reference's layer. A `ByBlock` appearance takes the reference's effective value:
+//! the reference's own value, or, when the reference is by-layer, the explicit value of the reference's
+//! layer (the component keeps its own layer, so the value is written, not inherited). A reference that is
+//! itself by-block leaves the component by-block. A block reference is placed by its position, rotation and
 //! scale. A uniform scale, or a scale whose axes differ only in sign, is exact; any other
 //! non-uniform scale is refused. A block reference with attribute values is refused, because its
 //! attribute text is not exploded yet. Polylines with widths are refused, because the components
@@ -61,12 +62,56 @@ const OBJECTS: Message = Message {
 };
 
 /// The appearance fields that a `ByBlock` component takes from its reference, as (mode, value).
-const APPEARANCE: [(usize, usize); 4] = [
-    (entity::COLOR_BY, entity::COLOR),
-    (entity::LINETYPE_BY, entity::LINETYPE),
-    (entity::LINEWEIGHT_BY, entity::LINEWEIGHT),
-    (entity::TRANSPARENCY_BY, entity::TRANSPARENCY),
+const APPEARANCE: [(usize, usize, usize); 4] = [
+    (entity::COLOR_BY, entity::COLOR, types::layer::COLOR),
+    (
+        entity::LINETYPE_BY,
+        entity::LINETYPE,
+        types::layer::LINETYPE,
+    ),
+    (
+        entity::LINEWEIGHT_BY,
+        entity::LINEWEIGHT,
+        types::layer::LINEWEIGHT,
+    ),
+    (
+        entity::TRANSPARENCY_BY,
+        entity::TRANSPARENCY,
+        types::layer::TRANSPARENCY,
+    ),
 ];
+
+/// The explicit appearance a by-block component takes from its block reference, as the mode and the value
+/// to store: the reference's own value when it has one, and the value of the reference's layer when the
+/// reference is by-layer (the component keeps its own layer, so the layer's value must be written
+/// explicitly). `None` when the reference is itself by-block: the component then stays by-block.
+fn inherited(
+    snapshot: &Snapshot,
+    insert: &[Option<Value>],
+    mode: usize,
+    value: usize,
+    layer_field: usize,
+) -> Option<(Value, Option<Value>)> {
+    let explicit = Value::Enum(By::Object as u32);
+    match By::of(types::enum_at(insert, mode)) {
+        By::Object => Some((explicit, insert.get(value).cloned().flatten())),
+        By::Layer => {
+            let layer = match insert.get(entity::LAYER) {
+                Some(Some(Value::Reference(layer))) => *layer,
+                _ => return Some((explicit, None)),
+            };
+            let stored = snapshot
+                .get(snapshot.resolve(layer).ok()?)
+                .ok()?
+                .values
+                .get(layer_field)
+                .cloned()
+                .flatten();
+            Some((explicit, stored))
+        }
+        By::Block => None,
+    }
+}
 
 fn unsupported(key: &str, reason: &str) -> Error {
     Error::new(codes::EXPLODE_UNSUPPORTED)
@@ -187,13 +232,16 @@ fn block_components(snapshot: &Snapshot, id: ObjectId) -> Result<(Vec<Component>
             {
                 *slot = insert.get(entity::LAYER).cloned().flatten();
             }
-            for (mode, value) in APPEARANCE {
-                if By::of(types::enum_at(&member.values, mode)) == By::Block {
+            for (mode, value, layer_field) in APPEARANCE {
+                if By::of(types::enum_at(&member.values, mode)) != By::Block {
+                    continue;
+                }
+                if let Some((by, stored)) = inherited(snapshot, insert, mode, value, layer_field) {
                     if let Some(slot) = values.get_mut(mode) {
-                        *slot = insert.get(mode).cloned().flatten();
+                        *slot = Some(by);
                     }
                     if let Some(slot) = values.get_mut(value) {
-                        *slot = insert.get(value).cloned().flatten();
+                        *slot = stored;
                     }
                 }
             }
