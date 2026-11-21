@@ -15,7 +15,7 @@ draftbuilder-dynamic-y = Y
 draftbuilder-dynamic-x-size = X boyutu
 draftbuilder-dynamic-y-size = Y boyutu
 
-draftbuilder-history-ran = Çalıştırıldı: { $command }
+draftbuilder-history-ran = Tamamlandı: { $command }
 draftbuilder-history-cancelled = İptal edildi: { $command }
 draftbuilder-history-failed = { $command }: bu noktada hiçbir şey değiştirilemedi
 draftbuilder-history-undo = Geri al

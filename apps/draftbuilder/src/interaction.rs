@@ -344,7 +344,15 @@ impl DrawingInteraction {
                     .unwrap_or_default(),
                 parameters: Vec::new(),
             },
-            history: shown.history.iter().map(|l| self.history_text(l)).collect(),
+            // The shell echoes what was typed, as a command or as the answer to a prompt.
+            history: shown
+                .history
+                .iter()
+                .filter(|l| l.role != LineRole::Input)
+                .map(|l| self.history_text(l))
+                .collect(),
+            history_first: shown.history_first,
+            reports_results: true,
             cursor: shown.cursor.map(|c| self.to_drawing(c.point)),
             precision: Some(self.precision),
             overlays: self.overlays(shown),
@@ -860,7 +868,8 @@ mod tests {
         let mut a = adapter();
         typed(&mut a, &document, &p, "LINE").unwrap();
         assert!(a.output_now().status.active);
-        assert_eq!(a.output_now().history, vec!["LINE".to_owned()]);
+        // The shell echoes the typed command; the controller's history holds only its results.
+        assert!(a.output_now().history.is_empty());
 
         assert!(click(&mut a, &document, &p, [0.0, 0.0]));
         assert_eq!(a.output_now().status.answers, 1);

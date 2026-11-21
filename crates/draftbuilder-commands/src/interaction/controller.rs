@@ -82,6 +82,9 @@ pub struct Controller {
     /// The last resolved cursor and the raw pointer position it came from.
     cursor: Option<(Resolved, [f64; 2])>,
     history: Vec<HistoryLine>,
+    /// The lines other than typed input dropped from the front of `history`: the sequence number
+    /// of its first such line.
+    history_dropped: u64,
     /// How many input lines back from the newest the last recalled line is; `None` when none is recalled.
     recall: Option<usize>,
     /// The text the last recall event recalled, taken by the next outputs.
@@ -140,6 +143,7 @@ impl Controller {
             window: None,
             cursor: None,
             history: Vec::new(),
+            history_dropped: 0,
             recall: None,
             recalled: None,
             acquire: Acquire::Idle,
@@ -267,6 +271,7 @@ impl Controller {
             Event::RecallPrevious => self.recall_previous(),
             Event::RecallNext => self.recall_next(),
             Event::ClearHistory => {
+                self.history_dropped += self.not_input(self.history.len());
                 self.history.clear();
                 self.recall = None;
             }
@@ -1497,6 +1502,12 @@ impl Controller {
             .map(|line| line.text.clone())
     }
 
+    /// How many of the first `count` history lines are not typed input.
+    fn not_input(&self, count: usize) -> u64 {
+        let lines = self.history.iter().take(count);
+        u64::try_from(lines.filter(|l| l.role != LineRole::Input).count()).unwrap_or(0)
+    }
+
     /// The history length the session setting `command.history.length` gives.
     fn history_limit(&self) -> usize {
         match self.session_value("command.history.length") {
@@ -1629,6 +1640,7 @@ impl Controller {
     )]
     fn outputs(&mut self, document: &Document, errors: Vec<ErrorOut>) -> Outputs {
         let excess = self.history.len().saturating_sub(self.history_limit());
+        self.history_dropped += self.not_input(excess);
         self.history.drain(..excess);
         let snapshot = document.snapshot();
         self.session.units = crate::script::session_units(&snapshot);
@@ -1683,6 +1695,7 @@ impl Controller {
         Outputs {
             prompt,
             history: self.history.clone(),
+            history_first: self.history_dropped,
             recalled: self.recalled.take(),
             view,
             band,

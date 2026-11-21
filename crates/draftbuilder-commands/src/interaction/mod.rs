@@ -342,6 +342,8 @@ pub struct Outputs {
     pub prompt: Option<PromptOut>,
     /// The command history, oldest first, at most the length of `command.history.length` lines.
     pub history: Vec<HistoryLine>,
+    /// The number of lines other than typed input dropped from the front of `history`.
+    pub history_first: u64,
     /// The rubber band or the pending window, when one is drawn.
     pub band: Option<BandOut>,
     /// The snap marker, when an object snap decided the cursor.

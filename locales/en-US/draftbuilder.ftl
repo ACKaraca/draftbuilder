@@ -18,7 +18,7 @@ draftbuilder-dynamic-x-size = X size
 draftbuilder-dynamic-y-size = Y size
 
 # History lines of the drawing interaction: a command that ran, a cancelled one, and undo and redo steps.
-draftbuilder-history-ran = Ran: { $command }
+draftbuilder-history-ran = Done: { $command }
 draftbuilder-history-cancelled = Cancelled: { $command }
 draftbuilder-history-failed = { $command }: nothing could be changed at that point
 draftbuilder-history-undo = Undo
