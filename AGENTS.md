@@ -9,13 +9,9 @@ vocabulary, scripts and Lisp routines. Rust only; depends on `arc-core`, never o
 The M1 drawing, modify, selection, layer, precision, settings, script and interaction code exists in
 `draftbuilder-commands`, with the CLI and the windowed application over it, on one pinned
 `arc-core`. Lisp, toolsets and the drawing UI crate are still specifications. Read in this order:
-[docs/README.md](docs/README.md),
-[docs/product/vision.md](docs/product/vision.md),
-[docs/product/capabilities/README.md](docs/product/capabilities/README.md),
-[docs/architecture/overview.md](docs/architecture/overview.md),
-[docs/architecture/domain-model.md](docs/architecture/domain-model.md),
-[docs/architecture/dwg-compatibility.md](docs/architecture/dwg-compatibility.md),
-[docs/architecture/command-line.md](docs/architecture/command-line.md), [docs/adr/](docs/adr/README.md).
+[docs/README.md](docs/README.md), then the product vision, the capability index and the
+architecture documents it links (overview, domain model, DWG compatibility, command line), and
+[docs/adr/](docs/adr/README.md).
 
 ## Repository layout
 
@@ -99,12 +95,13 @@ in `arc-suite`; change it there first.
     changing a file format or public protocol, adding a new repository or remote, spending money,
     handling secrets, or any destructive git operation. Otherwise keep working.
 13. **Keep secrets and personal data out** of repositories, logs and requests.
-14. **Commit directly to `main` for now.** Until the project has a second maintainer and this
-    repository has reached its MVP release (for `arc-suite` and `arc-core`: the first product MVP),
-    work on `main`: no feature branches and no pull requests. Wherever these rules or the documents
-    say "pull request", read "commit". Run the checks before every push and name the issue in the
-    commit message. This rule is temporary and is deleted from a repository when that point is
-    reached.
+14. **The maintainer commits directly to `main` for now.** Until the project has a second maintainer
+    and this repository has reached its MVP release (for `arc-suite` and `arc-core`: the first
+    product MVP), the maintainer works on `main` without branches or pull requests; for that work,
+    read "commit" wherever the documents say "pull request". Other contributors work on a branch and
+    open a pull request, which the maintainer reviews and merges. Run the checks before every push
+    and name the issue in the commit message. This rule is temporary and is deleted from a
+    repository when that point is reached.
 
 ## Repository invariants
 
